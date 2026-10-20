@@ -281,7 +281,7 @@ class SearchTests(unittest.TestCase):
             self.assertTrue(result.stderr)
 
     def test_help_and_version(self):
-        for option, expected in (("--help", b"Usage:"), ("--version", b"0.2.0"), ("--help", b"schema")):
+        for option, expected in (("--help", b"Usage:"), ("--version", b"0.3.0"), ("--help", b"schema")):
             result = subprocess.run([BINARY, option], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0)
             self.assertIn(expected, result.stdout)
@@ -498,7 +498,7 @@ class ClispecTests(unittest.TestCase):
         doc = json.loads(result.stdout)
         self.assertEqual(doc["clispec"], "0.3")
         self.assertEqual(doc["name"], "fslocate")
-        self.assertEqual(doc["version"], "0.2.0")
+        self.assertEqual(doc["version"], "0.3.0")
         self.assertEqual(doc["output"]["piped"], "text")
         names = [command["name"] for command in doc["commands"]]
         self.assertEqual(names, ["schema", "search"])
