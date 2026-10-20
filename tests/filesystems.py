@@ -4,6 +4,8 @@ Requires passwordless sudo, loop mounts, mkfs.btrfs, mkfs.ext2/3/4, and mkfs.xfs
 Only images created by this script are formatted. No existing device is touched.
 """
 
+import base64
+import json
 import os
 from pathlib import Path
 import shutil
@@ -21,8 +23,8 @@ def command(args):
         raise RuntimeError(error.stderr.decode(errors="replace")) from error
 
 
-def search(root, pattern=b"", backend="auto", privileged=False):
-    args = [BINARY, "-0", "--root", root, "--backend", backend, "--", pattern]
+def search(root, pattern=b"", backend="auto", privileged=False, threads=8):
+    args = [BINARY, "-0", "-j", str(threads), "--root", root, "--backend", backend, "--", pattern]
     if privileged:
         args = ["sudo", "-n", *args]
     return subprocess.run(args, capture_output=True, timeout=30)
@@ -31,7 +33,8 @@ def search(root, pattern=b"", backend="auto", privileged=False):
 def paths(result):
     assert result.returncode == 0, result.stderr
     assert result.stderr == b"", result.stderr
-    entries = result.stdout.rstrip(b"\0").split(b"\0")
+    assert not result.stdout or result.stdout.endswith(b"\0"), result.stdout
+    entries = result.stdout.split(b"\0")[:-1] if result.stdout else []
     assert len(entries) == len(set(entries)), "duplicate paths"
     return set(entries)
 
@@ -120,9 +123,33 @@ for filesystem, native, size, mkfs in (
                 assert result.returncode == 2 and b"NativeUnsupported" in result.stderr, result.stderr
 
         assert all(os.fsencode(mount / "excluded") not in path for path in expected)
+        for mode in ("walk", "auto", "native") if native else ("walk", "auto"):
+            result = command(["sudo", "-n", BINARY, "-o", "json", "-b", mode, "-r", root, ""])
+            document = json.loads(result.stdout)
+            actual = {base64.b64decode(item["path_bytes_base64"], validate=True)
+                      if "path_bytes_base64" in item else item["path"].encode("utf-8")
+                      for item in document["items"]}
+            assert actual == expected and document["total"] == len(expected), (filesystem, mode)
+            for output in ("text", "json"):
+                result = command(["sudo", "-n", BINARY, "-0", "-o", output, "-b", mode,
+                                  "--limit", "3", "-r", root, "README"])
+                if output == "json":
+                    page = json.loads(result.stdout)
+                    assert len(page["items"]) == 3 and page["truncated"] and "total" not in page
+                else:
+                    assert len(result.stdout.split(b"\0")[:-1]) == 3, (filesystem, mode, result.stdout)
         if native and os.geteuid() != 0:
             result = search(root, "README", "native")
             assert result.returncode == 2 and b"CAP_SYS_ADMIN" in result.stderr, result.stderr
+
+        if filesystem == "xfs-parent":
+            probe_binary = work / "stale-handle-test"
+            command(["zig", "test", BINARY.parents[2] / "src/xfs.zig", "--test-filter", "XFS stale",
+                     "--test-no-exec", "-femit-bin=" + str(probe_binary)])
+            result = subprocess.run(["sudo", "-n", probe_binary], cwd=mount,
+                                    capture_output=True, timeout=30)
+            assert result.returncode == 0, result.stderr
+            assert b"SKIP" not in result.stderr, result.stderr
 
         fresh = root / "fresh-old"
         fresh.touch()
@@ -159,8 +186,11 @@ for filesystem, native, size, mkfs in (
             unprivileged = search(root, "README")
             assert unprivileged.returncode == 2 and b"lost+found" in unprivileged.stderr
             assert b"README-ext-mount" in unprivileged.stdout
-            result = search(root, "README", "native", True)
+            result = search(root, "README", "native", True, threads=1)
             assert result.returncode == 2 and b"NativeUnsupported" in result.stderr, result.stderr
+            native_expected = {path for path in paths(search(root, "README", "walk", True))
+                               if not path.startswith(os.fsencode(ext_mount) + b"/")}
+            assert set(result.stdout.split(b"\0")[:-1]) == native_expected, result.stdout
 
         print(f"{filesystem}: native={native}; {len(expected)} paths; parity, paging, hardlinks, root scope, live changes OK", flush=True)
     finally:

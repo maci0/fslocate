@@ -36,15 +36,34 @@ entries. The root itself is not included.
 - `-b MODE` / `--backend MODE` selects `auto`, `native`, or `walk` (details below).
 - `-0` / `--null` preserves arbitrary Unix filenames for machine consumption.
   Default newline output is ambiguous for names containing newlines.
-- `-j N` / `--threads N` selects 1–256 workers; default is up to 8 CPUs. Try
+- `-j N` / `--threads N` sets the worker limit (1–256); default is up to 8 CPUs.
+  If thread creation reaches a system limit, the search uses fewer workers. Try
   `-j 1` on spinning disks or when parallel I/O is slower. This controls the
   directory and Btrfs backends; XFS native queries currently run serially.
 - `--` ends option parsing, e.g. `fslocate -r . -- '-report'`.
 - `-h` / `--help` and `-V` / `--version` show help and version.
 - `schema` prints the clispec 0.3 document as one JSON document and exits 0. `schema search` returns that document filtered to the search command. It needs no root and no pattern.
 - `-o` / `--output` selects `auto` (default), `text`, or `json`. Text is one path per line on a terminal and when piped. `json` prints one document, `{"items":[{"path":"..."}],"total":N}`. A page that stops early sets `"truncated":true` and omits `total`.
-- `--limit N` and `--offset N` page matches in arrival order. Order is not stable across runs. `--fields path` is the only item field.
-- `search` is an optional command word: `fslocate search PATTERN [ROOT]`. A pattern named `schema` or `search` needs `--` in front.
+- JSON is emitted in buffered batches during the search. A directory error
+  preserves the available items, adds `"incomplete":true`, omits `total`, and
+  exits 2. Output failures can leave a partial document; always check the exit
+  status. JSON stderr contains one error object per line, with path and error
+  details for directory failures.
+- Valid UTF-8 paths appear directly in JSON's `path` field. For other filename
+  bytes, `path` is display text and `path_bytes_base64` contains the exact
+  absolute path bytes in standard base64. Use that field as the path identity
+  when present. It accompanies `path` even with `--fields path`; `-0` text
+  output also preserves the original bytes.
+- `--limit N` and `--offset N` page matches in arrival order. Order is not stable
+  across runs. Text stops at the last requested match; JSON checks one extra
+  match to determine whether the page is truncated.
+- `--fields` selects `path`, `path_bytes_base64`, or both in JSON. Explicitly
+  selecting `path_bytes_base64` includes it for every item, including UTF-8 paths.
+- `search` is an optional command word: `fslocate search PATTERN [ROOT]`.
+  `fslocate search schema` searches for `schema`. In the shorthand form, use
+  `--` before a pattern named `schema` or `search`, e.g. `fslocate -- schema`.
+- Long options that take a value accept both `--root DIR` and `--root=DIR` forms.
+  `schema` rejects search-only options and accepts an optional command filter.
 
 Exit statuses: **0** for matches (including a page that starts past the last match), **1** for no matches, **2** for invalid input,
 an output error, or an incomplete search. Unreadable directories are reported to
@@ -99,6 +118,9 @@ XFS filesystems work through the directory backend without changing their format
 Native XFS searches the underlying filesystem's metadata: it does not enter
 nested mounts and can return underlying names hidden by those mounts. Use `walk`
 when you need the mounted namespace's exact view.
+Inodes that disappear or are reused between bulkstat and parent queries are
+skipped. Bulkstat requests use 64-bit extent counters so highly fragmented files
+do not overflow the older counter format.
 
 Ext4's directory HTree and XFS's older inode APIs do not provide the filename
 records needed for an equivalent native search. They are supported through
@@ -180,6 +202,11 @@ zig build -Doptimize=ReleaseSafe
 python3 -m unittest discover -s tests -v
 ```
 
+CLI tests use `/dev/shm` when available to avoid disk-load interference.
+Set `TMPDIR=/path/on/filesystem` to choose a different location. Streaming
+fixtures still exceed 64 KiB, and long-path fixtures still exceed `PATH_MAX`.
+Mounted-filesystem integration checks below retain their real filesystem images.
+
 Privileged integration checks use disposable Btrfs, ext2 without directory-entry
 file types, ext3, ext4, XFS with parent pointers, and classic XFS images. They
 verify native/fallback parity, missing file-type metadata, pagination,
@@ -191,10 +218,12 @@ Btrfs filesystems, and mixed Btrfs/ext4 mounts:
 python3 tests/filesystems.py
 ```
 
-This requires passwordless sudo, loop-mount support, `mkfs.btrfs`, `mkfs.ext2`,
+This requires Zig 0.17.x, passwordless sudo, loop-mount support, `mkfs.btrfs`, `mkfs.ext2`,
 `mkfs.ext3`, `mkfs.ext4`, and `mkfs.xfs`. Only newly created image files are
 formatted. Temporary mounts
-and images are removed afterward.
+and images are removed afterward. The XFS parent-pointer fixture also compiles
+and runs a kernel-backed stale-handle regression test. JSON byte identities and
+text/JSON pagination are checked against the mounted fixtures.
 
 Additional mounted-filesystem checks use an independent expected-path manifest
 and verify ordinary/elevated searches, single/multiple workers, Unicode and
@@ -258,6 +287,59 @@ python3 tests/benchmark.py
 
 The benchmark temporarily creates 100,000 empty files inside the project and
 removes them afterward. `find` and `fd` are compared when installed.
+Fixture setup and correctness checks are excluded from timing. Runs rotate and
+reverse tool order, and report median elapsed time, the elapsed-time range, and
+search-process CPU time summed across threads. CPU time excludes descheduling
+and I/O waits; elapsed time measures the latency you experience. Neither metric
+is immune to CPU frequency changes, cache contention, or filesystem load.
+CPU time includes waited child processes, but excludes separate filesystem
+servers and kernel workers.
+
+Workloads can be selected independently. `selective` is the default; `all`,
+`json`, `ignore-case`, `missing`, and `deep` exercise other search paths. JSON is
+compared only between fslocate builds. Every tool must match an independently
+generated expected-path manifest before timing starts.
+
+```sh
+cp zig-out/bin/fslocate /tmp/fslocate-before
+# Build the changed version, then compare on the same fixtures:
+zig build -Doptimize=ReleaseSafe
+python3 tests/benchmark.py --compare /tmp/fslocate-before --case selective all json ignore-case missing deep --runs 15
+# Smaller fixtures for a quick benchmark smoke check:
+python3 tests/benchmark.py --directories 20 --files-per-dir 10 --runs 3
+# Memory-backed fixtures to separate disk load from warm metadata/CPU work:
+python3 tests/benchmark.py --fixture-parent /dev/shm --case selective deep --runs 15
+```
+
+`--binary PATH` selects the candidate build. `--compare PATH` adds the previous
+build and reports paired before/current CPU and elapsed-time ratios. On Linux,
+`--cpus 2,3,4,5,6,7,8,9` pins the runner and its children to those CPUs; choose
+CPUs allowed by your environment. Benchmarks run serially, outside correctness
+test execution, to avoid competing with their own fixture and build work.
+`--fixture-parent PATH` chooses the filesystem under test. Memory-backed runs
+measure tmpfs and must not be presented as Btrfs, XFS, or storage performance.
+
+Preparation can also run independently of builds and timing:
+
+```sh
+python3 tests/benchmark.py --prepare /dev/shm/fslocate-bench --case all deep
+python3 tests/benchmark.py --fixture /dev/shm/fslocate-bench --case selective all json ignore-case missing deep --runs 15
+```
+
+`--prepare` requires a new directory and exits after generating data; it needs
+no fslocate binary. `all deep` prepares both layouts, covering every workload.
+`--fixture` reuses the data without creating or deleting entries. A small
+`fixture.json` records layout version, dimensions, and prepared layouts.
+Saved dimensions are used automatically; conflicting size flags are rejected.
+Every reused layout is checked for missing, extra, or changed entry types before
+timing, and each tool still verifies its results. Fixtures persist until you
+remove them; `/dev/shm` fixtures disappear on reboot.
+
+Linux traversal uses [openat2](https://man7.org/linux/man-pages/man2/openat2.2.html)
+to resolve multiple components without following symlinks. Long paths are split
+at component boundaries. Kernels or sandboxes without that interface retain the
+component-by-component directory opener.
+
 Add `--native` to the benchmark command to include privileged native search;
 this needs passwordless sudo and a supported filesystem. The native timing above
 includes privilege-launch and synchronization costs, with the first flush done

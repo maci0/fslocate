@@ -6,8 +6,10 @@ their servers and exports are bound to loopback. See README.md for prerequisites
 """
 
 import argparse
+import base64
 from contextlib import ExitStack
 import errno
+import json
 import os
 from pathlib import Path
 import pwd
@@ -143,6 +145,15 @@ def verify(kind, root, manifest, writable, posix):
                   {path for path in expected if pattern in path})
         check(search(root, b"readme", backend, privileged, threads, True),
               {path for path in expected if b"readme" in path.lower()})
+    for privileged in (False, True):
+        args = [BINARY, "-o", "json", "-r", root, ""]
+        result = command(["sudo", "-n", *args] if privileged else args)
+        document = json.loads(result.stdout)
+        identities = [base64.b64decode(item["path_bytes_base64"], validate=True)
+                      if "path_bytes_base64" in item else item["path"].encode("utf-8")
+                      for item in document["items"]]
+        assert len(identities) == len(set(identities)) and set(identities) == expected, kind
+        assert document["total"] == len(expected), document
     unsupported = search(root, backend="native", privileged=True)
     assert unsupported.returncode == 2 and label.encode() in unsupported.stderr, unsupported.stderr
     assert b"NativeUnsupported" in unsupported.stderr and not unsupported.stdout
@@ -276,6 +287,7 @@ def run(kind):
             config = work / "smb.conf"
             port = 20000 + os.getpid() % 20000
             user = pwd.getpwuid(os.getuid()).pw_name
+            sudo("install", "-d", "-m", "0700", work / "private", work / "ncalrpc")
             config.write_text(f"""[global]
 interfaces = 127.0.0.1
 bind interfaces only = yes
@@ -286,6 +298,8 @@ pid directory = {work}
 lock directory = {work}
 state directory = {work}
 cache directory = {work}
+private dir = {work}/private
+ncalrpc dir = {work}/ncalrpc
 log file = {work}/smb.log
 [files]
 path = {source}

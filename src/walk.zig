@@ -3,7 +3,6 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const common = @import("common.zig");
 const Options = common.Options;
-const matches = common.matches;
 
 fn Search(comptime Reader: type) type {
     return struct {
@@ -12,6 +11,8 @@ fn Search(comptime Reader: type) type {
         io: Io,
         gpa: Allocator,
         opts: Options,
+        root: []const u8,
+        root_dir: Io.Dir,
         reader_state: if (has_state) Reader.State else void,
         directories: std.ArrayList([]const u8) = .empty,
         active: usize = 0,
@@ -22,13 +23,11 @@ fn Search(comptime Reader: type) type {
         found: std.atomic.Value(bool) = .init(false),
         failed: std.atomic.Value(bool) = .init(false),
         stopped: std.atomic.Value(bool) = .init(false),
+        output_failed: bool = false,
 
         fn report(self: *Self, path: []const u8, err: anyerror) void {
             self.failed.store(true, .monotonic);
-            std.debug.print("fslocate: {s}: {s}\n", .{ path, @errorName(err) });
-            if (self.opts.json) {
-                std.debug.print("{{\"error\":{{\"kind\":\"failure\",\"message\":\"search failed\",\"hint\":\"see --help\"}}}}\n", .{});
-            }
+            common.reportSearchError(self.gpa, self.opts.json, path, err);
         }
 
         fn stop(self: *Self) void {
@@ -43,28 +42,58 @@ fn Search(comptime Reader: type) type {
             defer output.clearRetainingCapacity();
             self.output_mutex.lockUncancelable(self.io);
             defer self.output_mutex.unlock(self.io);
-            if (self.stopped.load(.monotonic)) return;
+            if (self.output_failed) return;
             Io.File.stdout().writeStreamingAll(self.io, output.items) catch |err| {
+                self.output_failed = true;
                 if (err != error.BrokenPipe) self.report("stdout", err);
                 self.stop();
             };
         }
 
+        fn openDirectory(self: *Self, directory: []const u8) !Io.Dir {
+            if (directory.len == self.root.len)
+                return self.root_dir.openDir(self.io, ".", .{ .iterate = true });
+            const start = self.root.len + @intFromBool(self.root[self.root.len - 1] != '/');
+            if (std.mem.indexOfScalar(u8, directory[start..], '/') == null)
+                return self.root_dir.openDir(self.io, directory[start..], .{ .iterate = true, .follow_symlinks = false });
+            if (comptime @import("builtin").os.tag == .linux) {
+                if (@import("linux.zig").openDirNoSymlinks(self.root_dir.handle, directory[start..])) |dir|
+                    return dir;
+            }
+            var components = std.mem.splitScalar(u8, directory[start..], '/');
+            var dir = self.root_dir;
+            var owned = false;
+            errdefer if (owned) dir.close(self.io);
+            // Open each component from its parent: no intermediate symlinks or PATH_MAX limit.
+            while (components.next()) |component| {
+                const next = try dir.openDir(self.io, component, .{ .iterate = true, .follow_symlinks = false });
+                if (owned) dir.close(self.io);
+                dir = next;
+                owned = true;
+            }
+            return dir;
+        }
+
         fn scan(self: *Self, directory: []const u8, path: *std.ArrayList(u8), output: *std.ArrayList(u8)) !std.ArrayList([]const u8) {
+            errdefer self.write(output);
             var children: std.ArrayList([]const u8) = .empty;
             errdefer {
                 for (children.items) |child| self.gpa.free(child);
                 children.deinit(self.gpa);
             }
-            var dir = Io.Dir.openDirAbsolute(self.io, directory, .{ .iterate = true, .follow_symlinks = false }) catch |err| {
+            var dir = self.openDirectory(directory) catch |err| {
                 self.report(directory, err);
                 return children;
             };
             defer dir.close(self.io);
-            var reader = if (comptime has_state)
-                try Reader.init(self.io, dir, self.opts.backend, &self.reader_state)
+            var reader = (if (comptime has_state)
+                Reader.init(self.io, dir, self.opts.backend, &self.reader_state)
             else
-                try Reader.init(self.io, dir, self.opts.backend);
+                Reader.init(self.io, dir, self.opts.backend)) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                self.report(directory, err);
+                return children;
+            };
             path.clearRetainingCapacity();
             try path.appendSlice(self.gpa, directory);
             if (directory[directory.len - 1] != '/') try path.append(self.gpa, '/');
@@ -76,20 +105,30 @@ fn Search(comptime Reader: type) type {
                 }) orelse break;
                 path.shrinkRetainingCapacity(prefix_len);
                 try path.appendSlice(self.gpa, entry.name);
-                if (matches(path.items, self.opts.pattern, self.opts.ignore_case)) {
+                if (self.opts.matches(path.items)) {
                     self.found.store(true, .monotonic);
                     const decision = self.collector.consider(path.items) catch |err| {
-                        self.report("stdout", err);
+                        if (err != error.BrokenPipe) self.failed.store(true, .monotonic);
                         self.stop();
                         break;
                     };
                     switch (decision) {
                         .skip => {},
-                        .done => self.stop(),
-                        .emit => if (!self.collector.json) {
-                            try output.appendSlice(self.gpa, path.items);
-                            try output.append(self.gpa, self.opts.separator);
-                            if (output.items.len >= 64 * 1024) self.write(output);
+                        .done => {
+                            self.stop();
+                            break;
+                        },
+                        .emit, .last => {
+                            if (!self.collector.json) {
+                                try output.ensureUnusedCapacity(self.gpa, path.items.len + 1);
+                                output.appendSliceAssumeCapacity(path.items);
+                                output.appendAssumeCapacity(self.opts.separator);
+                                if (output.items.len >= 64 * 1024) self.write(output);
+                            }
+                            if (decision == .last) {
+                                self.stop();
+                                break;
+                            }
                         },
                     }
                 }
@@ -137,7 +176,9 @@ fn Search(comptime Reader: type) type {
                 defer children.deinit(self.gpa);
                 self.mutex.lockUncancelable(self.io);
                 defer self.mutex.unlock(self.io);
-                self.directories.appendSlice(self.gpa, children.items) catch |err| {
+                if (self.stopped.load(.monotonic)) {
+                    for (children.items) |child| self.gpa.free(child);
+                } else self.directories.appendSlice(self.gpa, children.items) catch |err| {
                     for (children.items) |child| self.gpa.free(child);
                     self.report(directory, err);
                     self.stopped.store(true, .monotonic);
@@ -149,11 +190,13 @@ fn Search(comptime Reader: type) type {
     };
 }
 
-pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: []const u8, collector: *common.Collector) !u8 {
+pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: []const u8, root_dir: Io.Dir, collector: *common.Collector) !u8 {
     var search: Search(Reader) = .{
         .io = io,
         .gpa = gpa,
         .opts = opts,
+        .root = root,
+        .root_dir = root_dir,
         .collector = collector,
         .reader_state = if (@hasDecl(Reader, "State")) Reader.State.init(gpa) else {},
     };
@@ -170,10 +213,7 @@ pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: [
     var threads: [255]std.Thread = undefined;
     var started: usize = 0;
     while (started + 1 < opts.threads) : (started += 1) {
-        threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch |err| {
-            search.report("worker", err);
-            break;
-        };
+        threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch break;
     }
     search.worker();
     for (threads[0..started]) |thread| thread.join();

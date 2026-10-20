@@ -1,5 +1,34 @@
 const std = @import("std");
 
+pub fn reportSearchError(gpa: std.mem.Allocator, json: bool, path: []const u8, err: anyerror) void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    formatSearchError(&out, gpa, json, path, err) catch {
+        if (json)
+            std.debug.print("{{\"error\":{{\"kind\":\"failure\",\"message\":\"{s}\",\"hint\":\"see --help\"}}}}\n", .{@errorName(err)})
+        else
+            std.debug.print("fslocate: {s}\n", .{@errorName(err)});
+        return;
+    };
+    std.debug.print("{s}", .{out.items});
+}
+
+fn formatSearchError(out: *std.ArrayList(u8), gpa: std.mem.Allocator, json: bool, path: []const u8, err: anyerror) !void {
+    if (!json) {
+        try out.appendSlice(gpa, "fslocate: ");
+        try appendJsonString(out, gpa, path);
+        try out.appendSlice(gpa, ": ");
+        try out.appendSlice(gpa, @errorName(err));
+        try out.append(gpa, '\n');
+        return;
+    }
+    try out.appendSlice(gpa, "{\"error\":{\"kind\":\"failure\",\"message\":");
+    try appendJsonString(out, gpa, @errorName(err));
+    try out.append(gpa, ',');
+    try appendPathFields(out, gpa, path, .{});
+    try out.appendSlice(gpa, ",\"hint\":\"see --help\"}}\n");
+}
+
 pub const Options = struct {
     backend: Backend = .auto,
     pattern: []const u8,
@@ -7,15 +36,49 @@ pub const Options = struct {
     ignore_case: bool = false,
     separator: u8 = '\n',
     threads: usize,
-    /// When set, matches are kept for one JSON document instead of streamed as text.
+    /// Stream matches as one JSON document instead of text.
     json: bool = false,
+    fields: Fields = .{},
     /// Skip this many matches before emitting. Arrival order, which is unsorted.
     offset: usize = 0,
-    /// Cap emitted matches. Null means no cap. One match past the cap sets `truncated`.
+    /// Cap emitted matches. JSON checks one extra match to establish `truncated`.
     limit: ?usize = null,
+    /// KMP prefix table, prepared once before workers start.
+    prefix: []const usize = &.{},
+
+    pub fn preparePattern(self: *Options, gpa: std.mem.Allocator) !void {
+        if (!self.ignore_case or self.pattern.len <= 4) return;
+        const prefix = try gpa.alloc(usize, self.pattern.len);
+        prefix[0] = 0;
+        var matched: usize = 0;
+        for (self.pattern[1..], 1..) |byte, i| {
+            while (matched > 0 and std.ascii.toLower(byte) != std.ascii.toLower(self.pattern[matched]))
+                matched = prefix[matched - 1];
+            if (std.ascii.toLower(byte) == std.ascii.toLower(self.pattern[matched])) matched += 1;
+            prefix[i] = matched;
+        }
+        self.prefix = prefix;
+    }
+
+    pub inline fn matches(self: Options, path: []const u8) bool {
+        // Short paths favor the simple scan; KMP bounds work on long repetitive paths.
+        if (self.prefix.len == 0 or path.len < 256)
+            return @import("common.zig").matches(path, self.pattern, self.ignore_case);
+        if (self.pattern.len > path.len) return false;
+        var matched: usize = 0;
+        for (path) |byte| {
+            while (matched > 0 and std.ascii.toLower(byte) != std.ascii.toLower(self.pattern[matched]))
+                matched = self.prefix[matched - 1];
+            if (std.ascii.toLower(byte) == std.ascii.toLower(self.pattern[matched])) matched += 1;
+            if (matched == self.pattern.len) return true;
+        }
+        return false;
+    }
 };
 
-pub const Decision = enum { skip, emit, done };
+pub const Fields = struct { path: bool = true, path_bytes_base64: bool = false };
+
+pub const Decision = enum { skip, emit, last, done };
 
 /// Shared match counter. Walk workers and the XFS scan call `consider` under its mutex.
 pub const Collector = struct {
@@ -25,20 +88,31 @@ pub const Collector = struct {
     limit: ?usize,
     json: bool,
     pretty: bool,
+    fields: Fields = .{},
     mutex: std.Io.Mutex = .init,
     seen: usize = 0,
     kept: usize = 0,
     truncated: bool = false,
-    paths: std.ArrayList([]u8) = .empty,
+    output: std.ArrayList(u8) = .empty,
+    started: bool = false,
+    output_error: ?anyerror = null,
 
     pub fn deinit(self: *Collector) void {
-        for (self.paths.items) |path| self.gpa.free(path);
-        self.paths.deinit(self.gpa);
+        self.output.deinit(self.gpa);
     }
 
     pub fn consider(self: *Collector, path: []const u8) !Decision {
+        if (!self.json and self.offset == 0 and self.limit == null) return .emit;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
+        if (self.output_error != null) return .done;
+        return self.considerLocked(path) catch |err| {
+            self.output_error = err;
+            return err;
+        };
+    }
+
+    fn considerLocked(self: *Collector, path: []const u8) !Decision {
         const index = self.seen;
         self.seen += 1;
         if (index < self.offset) return .skip;
@@ -48,36 +122,54 @@ pub const Collector = struct {
                 return .done;
             }
         }
-        self.kept += 1;
         if (self.json) {
-            try self.paths.append(self.gpa, try self.gpa.dupe(u8, path));
+            try self.begin();
+            const start = self.output.items.len;
+            errdefer self.output.shrinkRetainingCapacity(start);
+            if (self.kept != 0) try self.output.append(self.gpa, ',');
+            if (self.pretty) try self.output.appendSlice(self.gpa, "\n  ");
+            try self.output.append(self.gpa, '{');
+            try appendPathFields(&self.output, self.gpa, path, self.fields);
+            try self.output.append(self.gpa, '}');
         }
+        self.kept += 1;
+        if (self.output.items.len >= 64 * 1024) try self.flush();
+        if (!self.json) if (self.limit) |limit| {
+            if (self.kept == limit) return .last;
+        };
         return .emit;
     }
 
-    pub fn finish(self: *Collector) !void {
+    fn begin(self: *Collector) !void {
+        if (self.started) return;
+        try self.output.appendSlice(self.gpa, "{\"items\":[");
+        self.started = true;
+    }
+
+    fn flush(self: *Collector) !void {
+        std.Io.File.stdout().writeStreamingAll(self.io, self.output.items) catch |err| {
+            self.output_error = err;
+            return err;
+        };
+        self.output.clearRetainingCapacity();
+    }
+
+    pub fn finish(self: *Collector, incomplete: bool) !void {
         if (!self.json) return;
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(self.gpa);
-        try out.appendSlice(self.gpa, "{\"items\":[");
-        if (self.pretty and self.paths.items.len > 0) try out.append(self.gpa, '\n');
-        for (self.paths.items, 0..) |path, i| {
-            if (self.pretty) try out.appendSlice(self.gpa, "  ");
-            try out.appendSlice(self.gpa, "{\"path\":");
-            try appendJsonString(&out, self.gpa, path);
-            try out.append(self.gpa, '}');
-            if (i + 1 != self.paths.items.len) try out.append(self.gpa, ',');
-            if (self.pretty) try out.append(self.gpa, '\n');
-        }
-        try out.append(self.gpa, ']');
-        if (self.truncated) {
-            try out.appendSlice(self.gpa, ",\"truncated\":true");
+        if (self.output_error) |err| return err;
+        try self.begin();
+        if (self.pretty and self.kept > 0) try self.output.append(self.gpa, '\n');
+        try self.output.append(self.gpa, ']');
+        if (incomplete) {
+            try self.output.appendSlice(self.gpa, ",\"incomplete\":true");
+        } else if (self.truncated) {
+            try self.output.appendSlice(self.gpa, ",\"truncated\":true");
         } else {
-            try out.appendSlice(self.gpa, ",\"total\":");
-            try appendUsize(&out, self.gpa, self.seen);
+            try self.output.appendSlice(self.gpa, ",\"total\":");
+            try appendUsize(&self.output, self.gpa, self.seen);
         }
-        try out.appendSlice(self.gpa, "}\n");
-        try std.Io.File.stdout().writeStreamingAll(self.io, out.items);
+        try self.output.appendSlice(self.gpa, "}\n");
+        try self.flush();
     }
 };
 
@@ -85,6 +177,21 @@ fn appendUsize(out: *std.ArrayList(u8), gpa: std.mem.Allocator, value: usize) !v
     var buf: [32]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return error.OutOfMemory;
     try out.appendSlice(gpa, text);
+}
+
+fn appendPathFields(out: *std.ArrayList(u8), gpa: std.mem.Allocator, path: []const u8, fields: Fields) !void {
+    if (fields.path) {
+        try out.appendSlice(gpa, "\"path\":");
+        try appendJsonString(out, gpa, path);
+    }
+    if (fields.path_bytes_base64 or !std.unicode.utf8ValidateSlice(path)) {
+        if (fields.path) try out.append(gpa, ',');
+        try out.appendSlice(gpa, "\"path_bytes_base64\":\"");
+        const start = out.items.len;
+        try out.resize(gpa, start + std.base64.standard.Encoder.calcSize(path.len));
+        _ = std.base64.standard.Encoder.encode(out.items[start..], path);
+        try out.append(gpa, '"');
+    }
 }
 
 fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []const u8) !void {
@@ -98,7 +205,7 @@ fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []co
             i += 1;
             continue;
         }
-        if (b < 0x20 or b >= 0x80) {
+        if (b < 0x20 or b >= 0x7f) {
             const width = std.unicode.utf8ByteSequenceLength(b) catch 1;
             if (b >= 0x80 and i + width <= bytes.len) {
                 const seq = bytes[i..][0..width];
@@ -129,4 +236,27 @@ pub fn matches(path: []const u8, pattern: []const u8, ignore_case: bool) bool {
         if (std.ascii.eqlIgnoreCase(path[i..][0..pattern.len], pattern)) return true;
     }
     return false;
+}
+
+fn collectWithAllocationFailures(gpa: std.mem.Allocator) !void {
+    var collector: Collector = .{ .io = std.testing.io, .gpa = gpa, .offset = 0, .limit = null, .json = true, .pretty = false };
+    defer collector.deinit();
+    _ = try collector.consider("/path-\xff");
+}
+
+test "JSON collector frees allocations when encoding fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, collectWithAllocationFailures, .{});
+}
+
+test "prepared case-insensitive patterns handle overlaps and raw bytes" {
+    const long: [512]u8 = @splat('a');
+    const long_hit = long ++ "B/\xffAbCd/MiXeD/AAABAAAB";
+    for ([_][]const u8{ "aAaAaB", "aaaab", "AAABAAAB", "mixed", "\xffAbCd", "", "ab" }) |pattern| {
+        var opts: Options = .{ .pattern = pattern, .ignore_case = true, .threads = 1 };
+        try opts.preparePattern(std.testing.allocator);
+        defer std.testing.allocator.free(opts.prefix);
+        for ([_][]const u8{ "", "a", "aaaaaaaaab", "aaabaaabaaab", "/MiXeD/path", "\xffaBcD", "other", &long, long_hit }) |path| {
+            try std.testing.expectEqual(std.ascii.findIgnoreCase(path, pattern) != null, opts.matches(path));
+        }
+    }
 }

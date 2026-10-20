@@ -40,6 +40,6 @@ pub const Reader = struct {
     }
 };
 
-pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, _: std.Io.Dir, collector: *common.Collector) !u8 {
-    return @import("walk.zig").run(Reader, io, gpa, opts, root, collector);
+pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, dir: std.Io.Dir, collector: *common.Collector) !u8 {
+    return @import("walk.zig").run(Reader, io, gpa, opts, root, dir, collector);
 }

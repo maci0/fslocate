@@ -43,7 +43,7 @@ pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []
                     else => return err,
                 };
             } else if (opts.backend == .native) {
-                std.debug.print("fslocate: {s} has no supported native filename-search API\n", .{Backend.name});
+                if (!opts.json) std.debug.print("fslocate: {s} has no supported native filename-search API\n", .{Backend.name});
                 return error.NativeUnsupported;
             }
             return Backend.search(io, gpa, opts, root, dir, collector);

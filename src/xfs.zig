@@ -11,7 +11,7 @@ pub fn supports(magic: usize) bool {
 
 const BulkHeader = extern struct {
     inode: u64 = 0,
-    flags: u32 = 0,
+    flags: u32 = 1 << 2,
     count: u32 = 256,
     returned: u32 = 0,
     agno: u32 = 0,
@@ -121,7 +121,10 @@ const Parents = struct {
                 // The kernel copies no record bytes when an inode has no parents.
                 @memset(&self.buffer, 0);
                 self.args.request.buffer = @intFromPtr(&self.buffer);
-                try linux.ioctl(self.fd, getparents, &self.args);
+                linux.ioctl(self.fd, getparents, &self.args) catch |err| switch (err) {
+                    error.FilesystemChanged => return null,
+                    else => return err,
+                };
                 if (self.args.request.output_flags & ~@as(u16, 3) != 0 or
                     (self.args.request.output_flags & 2 == 0 and
                         std.mem.eql(u32, &old_cursor, &self.args.request.cursor))) return error.CorruptMetadata;
@@ -138,10 +141,10 @@ const Parents = struct {
 };
 
 pub fn probe(_: std.Io, dir: std.Io.Dir) !void {
-    var args: BulkArgs = .{ .header = .{ .count = 1 }, .records = undefined };
-    try linux.ioctl(dir.handle, bulkstat, &args);
     var parents = Parents.init(dir.handle, try rootHandle(dir));
     _ = try parents.next();
+    var args: BulkArgs = .{ .header = .{ .count = 1 }, .records = undefined };
+    try linux.ioctl(dir.handle, bulkstat, &args);
 }
 
 const Identity = struct { inode: u64, generation: u32 };
@@ -230,18 +233,22 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
                 const parent_path = (try paths.resolve(parent.handle)) orelse continue;
                 const path = try join(gpa, parent_path, parent.name);
                 defer gpa.free(path);
-                if (common.matches(path, opts.pattern, opts.ignore_case)) {
+                if (opts.matches(path)) {
                     found = true;
-                    switch (try collector.consider(path)) {
+                    const decision = try collector.consider(path);
+                    switch (decision) {
                         .skip => {},
                         .done => break :scan,
-                        .emit => if (!collector.json) {
-                            try output.appendSlice(gpa, path);
-                            try output.append(gpa, opts.separator);
-                            if (output.items.len >= 64 * 1024) {
-                                try std.Io.File.stdout().writeStreamingAll(io, output.items);
-                                output.clearRetainingCapacity();
+                        .emit, .last => {
+                            if (!collector.json) {
+                                try output.appendSlice(gpa, path);
+                                try output.append(gpa, opts.separator);
+                                if (output.items.len >= 64 * 1024) {
+                                    try std.Io.File.stdout().writeStreamingAll(io, output.items);
+                                    output.clearRetainingCapacity();
+                                }
                             }
+                            if (decision == .last) break :scan;
                         },
                     }
                 }
@@ -259,10 +266,35 @@ test "XFS ioctl ABI" {
     try std.testing.expectEqual(@as(usize, 56), @sizeOf(HandleRequest));
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(ParentsByHandle));
     try std.testing.expectEqual(@as(usize, 132), @offsetOf(BulkStat, "mode"));
+    try std.testing.expectEqual(@as(u32, 4), (BulkHeader{}).flags);
     if (@import("builtin").cpu.arch == .x86_64) {
         try std.testing.expectEqual(@as(u32, 0x8040587f), bulkstat);
         try std.testing.expectEqual(@as(u32, 0xc040583f), getparents);
     }
+}
+
+test "XFS stale handles are skipped" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag != .linux or
+        (builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64)) return error.SkipZigTest;
+    const io = std.testing.io;
+    var cwd = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
+    defer cwd.close(io);
+    if (!supports((try linux.statFs(cwd.handle)).kind)) return error.SkipZigTest;
+    probe(io, cwd) catch |err| switch (err) {
+        error.NativeUnsupported, error.NativePermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    var temporary = std.testing.tmpDir(.{ .iterate = true });
+    defer temporary.cleanup();
+    const file = try temporary.dir.createFile(io, "victim", .{});
+    defer file.close(io);
+    var handle = try rootHandle(.{ .handle = file.handle });
+    handle.generation +%= 1;
+    var parents = Parents.init(temporary.dir.handle, handle);
+    parents.args.request.buffer = @intFromPtr(&parents.buffer);
+    try std.testing.expectError(error.FilesystemChanged, linux.ioctl(parents.fd, getparents, &parents.args));
+    try std.testing.expect((try parents.next()) == null);
 }
 
 test "XFS parent records reject invalid lengths and names" {

@@ -129,21 +129,21 @@ pub const Reader = union(enum) {
             self.synced.deinit();
         }
 
-        fn prepare(self: *State, io: std.Io, dir: std.Io.Dir) !void {
-            const fs = try linux.statFs(dir.handle);
-            if (!supports(fs.kind)) return error.NativeUnsupported;
+        fn prepare(self: *State, io: std.Io, dir: std.Io.Dir, fsid: [2]i32) !void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            if (self.synced.contains(fs.fsid)) return;
+            if (self.synced.contains(fsid)) return;
             // Tree search omits delayed directory updates until they are flushed.
             try linux.syncFs(dir.handle);
-            try self.synced.put(fs.fsid, {});
+            try self.synced.put(fsid, {});
         }
     };
 
     fn initTree(io: std.Io, dir: std.Io.Dir, state: *State) !TreeReader {
+        const fs = try linux.statFs(dir.handle);
+        if (!supports(fs.kind)) return error.NativeUnsupported;
         var reader = try TreeReader.init(io, dir);
-        try state.prepare(io, dir);
+        try state.prepare(io, dir, fs.fsid);
         try reader.fetch();
         return reader;
     }
@@ -172,8 +172,8 @@ pub fn probe(io: std.Io, dir: std.Io.Dir) !void {
     try reader.fetch();
 }
 
-pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, _: std.Io.Dir, collector: *common.Collector) !u8 {
-    return @import("walk.zig").run(Reader, io, gpa, opts, root, collector);
+pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, dir: std.Io.Dir, collector: *common.Collector) !u8 {
+    return @import("walk.zig").run(Reader, io, gpa, opts, root, dir, collector);
 }
 
 test "Btrfs ioctl ABI" {

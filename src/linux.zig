@@ -2,6 +2,39 @@ const std = @import("std");
 const linux = std.os.linux;
 pub const ioc = linux.IOCTL;
 
+pub fn openDirNoSymlinks(root_fd: i32, path: []const u8) ?std.Io.Dir {
+    const OpenHow = extern struct { flags: u64, mode: u64 = 0, resolve: u64 = 0x04 };
+    const how: OpenHow = .{ .flags = @as(u32, @bitCast(linux.O{ .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true })) };
+    var remaining = path;
+    var fd = root_fd;
+    defer if (fd != root_fd) {
+        _ = linux.close(fd);
+    };
+    while (true) {
+        // Chunk at component boundaries so kernel path resolution also works beyond PATH_MAX.
+        const end = if (remaining.len >= std.posix.PATH_MAX)
+            std.mem.lastIndexOfScalar(u8, remaining[0 .. std.posix.PATH_MAX - 1], '/') orelse return null
+        else
+            remaining.len;
+        const name = std.posix.toPosixPath(remaining[0..end]) catch return null;
+        const result = linux.syscall4(.openat2, @as(u32, @bitCast(fd)), @intFromPtr(&name), @intFromPtr(&how), @sizeOf(OpenHow));
+        switch (linux.errno(result)) {
+            .SUCCESS => {
+                if (fd != root_fd) _ = linux.close(fd);
+                fd = @intCast(result);
+                if (end == remaining.len) {
+                    const dir: std.Io.Dir = .{ .handle = fd };
+                    fd = root_fd;
+                    return dir;
+                }
+                remaining = remaining[end + 1 ..];
+            },
+            .INTR => continue,
+            else => return null,
+        }
+    }
+}
+
 pub fn ioctl(fd: i32, request: u32, args: anytype) !void {
     while (true) {
         const result = linux.ioctl(fd, request, @intFromPtr(args));
@@ -56,6 +89,19 @@ pub fn validName(name: []const u8) bool {
         std.mem.indexOfScalar(u8, name, 0) == null and
         std.mem.indexOfScalar(u8, name, '/') == null and
         !std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..");
+}
+
+test "openat2 rejects directory symlinks" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{ .iterate = true });
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "real/child");
+    try temporary.dir.symLink(io, "real", "alias", .{});
+    const dir = openDirNoSymlinks(temporary.dir.handle, "real/child") orelse return error.SkipZigTest;
+    dir.close(io);
+    try std.testing.expect(openDirNoSymlinks(temporary.dir.handle, "alias/child") == null);
+    try std.testing.expect(openDirNoSymlinks(-1, "real/child") == null);
 }
 
 test "metadata names cannot introduce path components" {
