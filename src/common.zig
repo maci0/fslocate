@@ -361,7 +361,7 @@ fn fuzzMatches(_: void, smith: *std.testing.Smith) !void {
         std.ascii.findIgnoreCase(path, pattern) != null
     else
         std.mem.indexOf(u8, path, pattern) != null;
-    try std.testing.expectEqual(expected, matches(path, pattern, ignore_case));
+    try std.testing.expectEqual(expected, matchesFree(path, pattern, ignore_case));
     // KMP path (Options.matches with preparePattern) must agree for long paths.
     if (pattern.len > 4 and path.len >= 256) {
         var opts: Options = .{ .pattern = pattern, .ignore_case = ignore_case, .threads = 1 };
