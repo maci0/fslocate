@@ -264,6 +264,7 @@ fn searchOnce(init: std.process.Init, options: Options) !u8 {
     var opts = options;
     try opts.preparePattern(init.gpa);
     defer init.gpa.free(opts.prefix);
+    defer init.gpa.free(opts.lowered);
     const pretty = opts.json and (Io.File.stdout().isTty(init.io) catch false);
     var collector = common.Collector{
         .io = init.io,

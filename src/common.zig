@@ -16,14 +16,14 @@ pub fn reportSearchError(gpa: std.mem.Allocator, json: bool, path: []const u8, e
 fn formatSearchError(out: *std.ArrayList(u8), gpa: std.mem.Allocator, json: bool, path: []const u8, err: anyerror) !void {
     if (!json) {
         try out.appendSlice(gpa, "fslocate: ");
-        try appendJsonString(out, gpa, path);
+        try appendJsonString(out, gpa, path, std.unicode.utf8ValidateSlice(path));
         try out.appendSlice(gpa, ": ");
         try out.appendSlice(gpa, @errorName(err));
         try out.append(gpa, '\n');
         return;
     }
     try out.appendSlice(gpa, "{\"error\":{\"kind\":\"failure\",\"message\":");
-    try appendJsonString(out, gpa, @errorName(err));
+    try appendJsonString(out, gpa, @errorName(err), true);
     try out.append(gpa, ',');
     try appendPathFields(out, gpa, path, .{});
     try out.appendSlice(gpa, ",\"hint\":\"see --help\"}}\n");
@@ -45,16 +45,22 @@ pub const Options = struct {
     limit: ?usize = null,
     /// KMP prefix table, prepared once before workers start.
     prefix: []const usize = &.{},
+    /// Lower-cased copy of pattern for ignore-case matching; freed by caller.
+    lowered: []const u8 = &.{},
 
     pub fn preparePattern(self: *Options, gpa: std.mem.Allocator) !void {
         if (!self.ignore_case or self.pattern.len <= 4) return;
+        const lowered = try gpa.alloc(u8, self.pattern.len);
+        for (self.pattern, 0..) |byte, i| lowered[i] = std.ascii.toLower(byte);
+        self.lowered = lowered;
         const prefix = try gpa.alloc(usize, self.pattern.len);
         prefix[0] = 0;
         var matched: usize = 0;
         for (self.pattern[1..], 1..) |byte, i| {
-            while (matched > 0 and std.ascii.toLower(byte) != std.ascii.toLower(self.pattern[matched]))
+            const lower = std.ascii.toLower(byte);
+            while (matched > 0 and lower != lowered[matched])
                 matched = prefix[matched - 1];
-            if (std.ascii.toLower(byte) == std.ascii.toLower(self.pattern[matched])) matched += 1;
+            if (lower == lowered[matched]) matched += 1;
             prefix[i] = matched;
         }
         self.prefix = prefix;
@@ -67,9 +73,10 @@ pub const Options = struct {
         if (self.pattern.len > path.len) return false;
         var matched: usize = 0;
         for (path) |byte| {
-            while (matched > 0 and std.ascii.toLower(byte) != std.ascii.toLower(self.pattern[matched]))
+            const lower = std.ascii.toLower(byte);
+            while (matched > 0 and lower != self.lowered[matched])
                 matched = self.prefix[matched - 1];
-            if (std.ascii.toLower(byte) == std.ascii.toLower(self.pattern[matched])) matched += 1;
+            if (lower == self.lowered[matched]) matched += 1;
             if (matched == self.pattern.len) return true;
         }
         return false;
@@ -180,11 +187,12 @@ fn appendUsize(out: *std.ArrayList(u8), gpa: std.mem.Allocator, value: usize) !v
 }
 
 fn appendPathFields(out: *std.ArrayList(u8), gpa: std.mem.Allocator, path: []const u8, fields: Fields) !void {
+    const valid_utf8 = std.unicode.utf8ValidateSlice(path);
     if (fields.path) {
         try out.appendSlice(gpa, "\"path\":");
-        try appendJsonString(out, gpa, path);
+        try appendJsonString(out, gpa, path, valid_utf8);
     }
-    if (fields.path_bytes_base64 or !std.unicode.utf8ValidateSlice(path)) {
+    if (fields.path_bytes_base64 or !valid_utf8) {
         if (fields.path) try out.append(gpa, ',');
         try out.appendSlice(gpa, "\"path_bytes_base64\":\"");
         const start = out.items.len;
@@ -194,35 +202,57 @@ fn appendPathFields(out: *std.ArrayList(u8), gpa: std.mem.Allocator, path: []con
     }
 }
 
-fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []const u8) !void {
+fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []const u8, valid_utf8: bool) !void {
     try out.append(gpa, '"');
-    var i: usize = 0;
-    while (i < bytes.len) {
-        const b = bytes[i];
-        if (b == '"' or b == '\\') {
-            try out.append(gpa, '\\');
+    if (valid_utf8) {
+        // Fast path: only quote/backslash/control need escaping; scan for runs.
+        var run_start: usize = 0;
+        var i: usize = 0;
+        while (i < bytes.len) : (i += 1) {
+            const b = bytes[i];
+            if (b == '"' or b == '\\') {
+                if (run_start < i) try out.appendSlice(gpa, bytes[run_start..i]);
+                try out.append(gpa, '\\');
+                try out.append(gpa, b);
+                run_start = i + 1;
+            } else if (b < 0x20) {
+                if (run_start < i) try out.appendSlice(gpa, bytes[run_start..i]);
+                var hex: [6]u8 = undefined;
+                const esc = std.fmt.bufPrint(&hex, "\\u{x:0>4}", .{b}) catch return error.OutOfMemory;
+                try out.appendSlice(gpa, esc);
+                run_start = i + 1;
+            }
+        }
+        if (run_start < bytes.len) try out.appendSlice(gpa, bytes[run_start..]);
+    } else {
+        var i: usize = 0;
+        while (i < bytes.len) {
+            const b = bytes[i];
+            if (b == '"' or b == '\\') {
+                try out.append(gpa, '\\');
+                try out.append(gpa, b);
+                i += 1;
+                continue;
+            }
+            if (b < 0x20 or b >= 0x7f) {
+                const width = std.unicode.utf8ByteSequenceLength(b) catch 1;
+                if (b >= 0x80 and i + width <= bytes.len) {
+                    const seq = bytes[i..][0..width];
+                    if (std.unicode.utf8ValidateSlice(seq)) {
+                        try out.appendSlice(gpa, seq);
+                        i += width;
+                        continue;
+                    }
+                }
+                var hex: [6]u8 = undefined;
+                const esc = std.fmt.bufPrint(&hex, "\\u{x:0>4}", .{b}) catch return error.OutOfMemory;
+                try out.appendSlice(gpa, esc);
+                i += 1;
+                continue;
+            }
             try out.append(gpa, b);
             i += 1;
-            continue;
         }
-        if (b < 0x20 or b >= 0x7f) {
-            const width = std.unicode.utf8ByteSequenceLength(b) catch 1;
-            if (b >= 0x80 and i + width <= bytes.len) {
-                const seq = bytes[i..][0..width];
-                if (std.unicode.utf8ValidateSlice(seq)) {
-                    try out.appendSlice(gpa, seq);
-                    i += width;
-                    continue;
-                }
-            }
-            var hex: [6]u8 = undefined;
-            const esc = std.fmt.bufPrint(&hex, "\\u{x:0>4}", .{b}) catch return error.OutOfMemory;
-            try out.appendSlice(gpa, esc);
-            i += 1;
-            continue;
-        }
-        try out.append(gpa, b);
-        i += 1;
     }
     try out.append(gpa, '"');
 }
@@ -281,6 +311,7 @@ test "prepared case-insensitive patterns handle overlaps and raw bytes" {
         var opts: Options = .{ .pattern = pattern, .ignore_case = true, .threads = 1 };
         try opts.preparePattern(std.testing.allocator);
         defer std.testing.allocator.free(opts.prefix);
+        defer std.testing.allocator.free(opts.lowered);
         // Short patterns (<=4) must skip allocation; long patterns must not.
         try std.testing.expectEqual(pattern.len <= 4, opts.prefix.len == 0);
         for ([_][]const u8{ "", "a", "aaaaaaaaab", "aaabaaabaaab", "/MiXeD/path", "\xffaBcD", "other", &long, long_hit }) |path| {
@@ -291,6 +322,7 @@ test "prepared case-insensitive patterns handle overlaps and raw bytes" {
     var kmp: Options = .{ .pattern = "AAABAAAB", .ignore_case = true, .threads = 1 };
     try kmp.preparePattern(std.testing.allocator);
     defer std.testing.allocator.free(kmp.prefix);
+    defer std.testing.allocator.free(kmp.lowered);
     try std.testing.expect(kmp.matches(long_hit));
     const long_miss = long ++ "B/\xffAbCd/MiXeD/AAABAAAA"; // truncated final char
     try std.testing.expect(!kmp.matches(long_miss));
@@ -324,7 +356,7 @@ fn fuzzJsonPath(_: void, smith: *std.testing.Smith) !void {
     const input = buf[0..len];
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
-    try appendJsonString(&out, std.testing.allocator, input);
+    try appendJsonString(&out, std.testing.allocator, input, std.unicode.utf8ValidateSlice(input));
     // Invariant: output is a quoted JSON string; unescaped bytes only in
     // printable ASCII range, valid UTF-8 sequences pass through, others \uXXXX.
     try std.testing.expect(out.items.len >= 2);
@@ -367,6 +399,7 @@ fn fuzzMatches(_: void, smith: *std.testing.Smith) !void {
         var opts: Options = .{ .pattern = pattern, .ignore_case = ignore_case, .threads = 1 };
         try opts.preparePattern(std.testing.allocator);
         defer std.testing.allocator.free(opts.prefix);
+        defer std.testing.allocator.free(opts.lowered);
         try std.testing.expectEqual(expected, opts.matches(path));
     }
 }

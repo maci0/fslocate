@@ -216,6 +216,8 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
     };
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(gpa);
+    var scratch: std.ArrayList(u8) = .empty;
+    defer scratch.deinit(gpa);
     var found = false;
     var args: BulkArgs = .{ .header = .{}, .records = undefined };
     // shortcut: XFS parent queries run serially, parallelize if profiling shows a bottleneck.
@@ -231,8 +233,11 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
             while (try parents.next()) |parent| {
                 if (parent.handle.fsid != root_handle.fsid) return error.CorruptMetadata;
                 const parent_path = (try paths.resolve(parent.handle)) orelse continue;
-                const path = try join(gpa, parent_path, parent.name);
-                defer gpa.free(path);
+                scratch.clearRetainingCapacity();
+                try scratch.appendSlice(gpa, parent_path);
+                if (!std.mem.endsWith(u8, parent_path, "/")) try scratch.append(gpa, '/');
+                try scratch.appendSlice(gpa, parent.name);
+                const path = scratch.items;
                 if (opts.matches(path)) {
                     found = true;
                     const decision = collector.consider(path) catch |err| {
