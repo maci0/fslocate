@@ -39,3 +39,19 @@ jobs:
           zig build -Doptimize=ReleaseSafe --prefix /tmp/fslocate-repro --cache-dir /tmp/fslocate-repro-cache
           cmp /tmp/fslocate-first /tmp/fslocate-repro/bin/fslocate
           file zig-out/bin/fslocate | grep -E "pie executable|stripped"
+      - name: Version consistency
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          py = pathlib.Path("pyproject.toml").read_text()
+          main = pathlib.Path("src/main.zig").read_text()
+          changelog = pathlib.Path("CHANGELOG.md").read_text()
+          security = pathlib.Path("SECURITY.md").read_text()
+          v_py = re.search(r'^version = "([^"]+)"', py, re.M).group(1)
+          v_zig = re.search(r'const version = "([^"]+)";', main).group(1)
+          assert v_py == v_zig, (v_py, v_zig)
+          assert f"## [{v_py}]" in changelog
+          assert f"{'.'.join(v_py.split('.')[:2])}.x (current)" in security
+          for lit in re.findall(r'"version":"([^"]+)"', main): assert lit == v_zig, lit
+          print("versions agree:", v_py)
+          PY

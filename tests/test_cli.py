@@ -318,15 +318,35 @@ class SearchTests(unittest.TestCase):
             self.assertTrue(result.stderr)
 
     def test_help_and_version(self):
+        version = self.declared_version()
         for option, expected in (
             ("--help", b"Usage:"),
-            ("--version", b"0.3.0"),
+            ("--version", version),
             ("--help", b"schema"),
         ):
             result = subprocess.run([BINARY, option], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0)
             self.assertIn(expected, result.stdout)
             self.assertEqual(result.stderr, b"")
+
+    def declared_version(self):
+        repo = Path(__file__).resolve().parents[1]
+        pyproject = (repo / "pyproject.toml").read_text()
+        main = (repo / "src/main.zig").read_text()
+        changelog = (repo / "CHANGELOG.md").read_text()
+        security = (repo / "SECURITY.md").read_text()
+        import re
+
+        pyproject_version = re.search(r'^version = "([^"]+)"', pyproject, re.M).group(1)
+        zig_version = re.search(r'const version = "([^"]+)";', main).group(1)
+        self.assertEqual(pyproject_version, zig_version)
+        self.assertIn(f'"{pyproject_version}"', main)
+        self.assertIn(f"## [{pyproject_version}]", changelog)
+        major_minor = ".".join(pyproject_version.split(".")[:2])
+        self.assertIn(f"{major_minor}.x (current)", security)
+        for version_literal in re.findall(r'"version":"([^"]+)"', main):
+            self.assertEqual(version_literal, zig_version)
+        return zig_version.encode()
 
     def test_backend_selection(self):
         expected = self.paths("README", "--backend", "walk")
@@ -611,7 +631,7 @@ class ClispecTests(unittest.TestCase):
         doc = json.loads(result.stdout)
         self.assertEqual(doc["clispec"], "0.3")
         self.assertEqual(doc["name"], "fslocate")
-        self.assertEqual(doc["version"], "0.3.0")
+        self.assertEqual(doc["version"].encode(), self.declared_version())
         self.assertEqual(doc["output"]["piped"], "text")
         names = [command["name"] for command in doc["commands"]]
         self.assertEqual(names, ["schema", "search"])
