@@ -108,7 +108,11 @@ fn Search(comptime Reader: type) type {
                 if (self.opts.matches(path.items)) {
                     self.found.store(true, .monotonic);
                     const decision = self.collector.consider(path.items) catch |err| {
-                        if (err != error.BrokenPipe) self.failed.store(true, .monotonic);
+                        if (err != error.BrokenPipe) {
+                            // JSON mode: main reports stdout once via collector.output_error; avoid duplicate.
+                            // Text mode: no later reporter exists, so report here.
+                            if (self.collector.json) self.failed.store(true, .monotonic) else self.report("stdout", err);
+                        }
                         self.stop();
                         break;
                     };
@@ -212,8 +216,12 @@ pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: [
     };
     var threads: [255]std.Thread = undefined;
     var started: usize = 0;
-    while (started + 1 < opts.threads) : (started += 1) {
-        threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch break;
+    spawn: while (started + 1 < opts.threads) : (started += 1) {
+        threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch {
+            search.report(root, error.ThreadSpawnFailed);
+            if (started == 0) return error.ThreadSpawnFailed;
+            break :spawn;
+        };
     }
     search.worker();
     for (threads[0..started]) |thread| thread.join();

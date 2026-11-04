@@ -235,7 +235,11 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
                 defer gpa.free(path);
                 if (opts.matches(path)) {
                     found = true;
-                    const decision = try collector.consider(path);
+                    const decision = collector.consider(path) catch |err| {
+                        // Text mode has no later reporter; JSON mode is reported by caller via output_error.
+                        if (!collector.json and err != error.BrokenPipe) common.reportSearchError(gpa, false, "stdout", err);
+                        return err;
+                    };
                     switch (decision) {
                         .skip => {},
                         .done => break :scan,

@@ -5,9 +5,9 @@ pub fn reportSearchError(gpa: std.mem.Allocator, json: bool, path: []const u8, e
     defer out.deinit(gpa);
     formatSearchError(&out, gpa, json, path, err) catch {
         if (json)
-            std.debug.print("{{\"error\":{{\"kind\":\"failure\",\"message\":\"{s}\",\"hint\":\"see --help\"}}}}\n", .{@errorName(err)})
+            std.debug.print("{{\"error\":{{\"kind\":\"failure\",\"message\":\"{s}\",\"path\":\"stdout\",\"hint\":\"see --help\"}}}}\n", .{@errorName(err)})
         else
-            std.debug.print("fslocate: {s}\n", .{@errorName(err)});
+            std.debug.print("fslocate: \"stdout\": {s}\n", .{@errorName(err)});
         return;
     };
     std.debug.print("{s}", .{out.items});

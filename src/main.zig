@@ -267,13 +267,17 @@ fn searchOnce(init: std.process.Init, options: Options) !u8 {
     defer init.gpa.free(root);
     var dir = try Io.Dir.openDirAbsolute(init.io, root, .{ .iterate = true });
     defer dir.close(init.io);
+    // Empty collector output means failure happened before JSON document started;
+    // run() reports it with root context.
     const code = backends.search(init.io, init.gpa, opts, root, dir, &collector) catch |err| {
-        if (opts.json and collector.output_error != null) {
+        if (collector.output_error != null) {
             if (err == error.BrokenPipe) return 0;
-            common.reportSearchError(init.gpa, true, "stdout", err);
+            common.reportSearchError(init.gpa, opts.json, "stdout", err);
             return 2;
         }
-        if (opts.json and collector.started and err != error.BrokenPipe) collector.finish(true) catch {};
+        if (opts.json and collector.started and err != error.BrokenPipe) collector.finish(true) catch |finish_err| {
+            common.reportSearchError(init.gpa, true, "stdout", finish_err);
+        };
         return err;
     };
     if (opts.json) collector.finish(code == 2) catch |err| {
@@ -292,10 +296,14 @@ fn run(init: std.process.Init) !u8 {
         var buf: [160]u8 = undefined;
         const message = if (err == error.NativePermissionDenied)
             "native metadata access requires CAP_SYS_ADMIN"
+        else if (err == error.FileNotFound or err == error.AccessDenied or err == error.NotDir)
+            "root does not exist or is not accessible"
         else
             std.fmt.bufPrint(&buf, "{s}", .{@errorName(err)}) catch "search failed";
         const hint = if (err == error.NativePermissionDenied)
             "run with sudo or use --backend walk"
+        else if (err == error.FileNotFound or err == error.AccessDenied or err == error.NotDir)
+            "check the root path and permissions"
         else
             "see --help";
         return report(init.io, opts.json, "failure", message, hint);
