@@ -19,19 +19,23 @@ sensitive path listings from other systems.
 
 ## Security posture (what the code actually does)
 
-- **Read-only by construction.** fslocate enumerates directory metadata
+- **Read-only by construction (metadata only).** fslocate enumerates directory metadata
   only; it never opens, reads, writes, or deletes file contents. There is
-  no database, index, daemon, network listener, or stored credential.
+  no database, index, daemon, network listener, or stored credential. The one
+  write-side effect is Btrfs: the native backend calls `syncfs` once per
+  Btrfs filesystem to flush pending writes (`src/btrfs.zig:State.prepare`,
+  `src/linux.zig:syncFs`) — a global, slow flush observable to other processes,
+  not a file-content modification.
 - **No privilege escalation.** The binary never elevates itself, prompts,
   or invokes `sudo`. Native Btrfs/XFS metadata queries require
   `CAP_SYS_ADMIN`, which the caller must already hold (e.g. via `sudo`);
   without it, `auto` mode falls back to unprivileged directory scanning.
   See `src/main.zig` and `src/backends.zig`.
 - **Symlink-safe traversal.** Directories are opened component-by-component
-  without following symlinks (`openat2` `RESOLVE_NO_SYMLINKS` on Linux,
-  `src/linux.zig:openDirNoSymlinks`; fallback in `src/walk.zig`). The
-  search root itself is resolved once before searching. Directory symlinks
-  inside the root are listed but not traversed.
+  without following symlinks (`openat2` with `O_NOFOLLOW` and
+  `RESOLVE_NO_SYMLINKS` on Linux, `src/linux.zig:openDirNoSymlinks`; fallback in
+  `src/walk.zig`). The search root itself is resolved once before searching.
+  Directory symlinks inside the root are listed but not traversed.
 - **Privileged output is sensitive.** Run under root, results can include
   path names inaccessible to an ordinary user. Treat output accordingly.
 - **Results are not a security boundary.** The search reads a live tree;
