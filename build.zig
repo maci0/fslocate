@@ -7,12 +7,27 @@ comptime {
 }
 
 pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    // Non-debug builds are the shipped artifacts: strip debug symbols (which
+    // embed absolute build-host paths) and produce position-independent,
+    // stack-protected code. Stack protection requires libc; fslocate is
+    // freestanding (direct syscalls, no libc), so enable the protector only
+    // when linking libc and rely on strip/PIC/PIE otherwise.
+    const hardened = optimize != .debug;
+    const want_libc = b.option(bool, "libc", "Link libc (enables stack protector)") orelse false;
     const module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = b.standardTargetOptions(.{}),
-        .optimize = b.standardOptimizeOption(.{}),
+        .optimize = optimize,
+        .strip = hardened,
+        .stack_protector = hardened and want_libc,
+        .pic = hardened,
+        .link_libc = want_libc,
     });
     const exe = b.addExecutable(.{ .name = "fslocate", .root_module = module });
+    // Zig 0.17's ExecutableOptions has no pie field; pie lives on the Compile
+    // step itself. Set it directly for hardened (non-debug) builds.
+    exe.pie = hardened;
     b.installArtifact(exe);
 
     const check = b.step("check", "Run static analysis (blocking)");

@@ -22,6 +22,8 @@ jobs:
           ruff format --check tests/
       - name: clang-format
         run: clang-format --dry-run --Werror tests/zfs_native_api.c
+      - name: zig fmt
+        run: zig fmt --check build.zig src
       - name: zig build check
         run: zig build check
       - name: zig build test
@@ -30,3 +32,10 @@ jobs:
         run: zig build -Doptimize=ReleaseSafe
       - name: python tests
         run: python3 -m unittest discover -s tests -v
+      - name: Reproducibility check
+        run: |
+          set -euo pipefail
+          cp zig-out/bin/fslocate /tmp/fslocate-first
+          zig build -Doptimize=ReleaseSafe --prefix /tmp/fslocate-repro --cache-dir /tmp/fslocate-repro-cache
+          cmp /tmp/fslocate-first /tmp/fslocate-repro/bin/fslocate
+          file zig-out/bin/fslocate | grep -E "pie executable|stripped"
