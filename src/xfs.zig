@@ -347,3 +347,26 @@ test "XFS parent records reject invalid lengths and names" {
     dot[32] = '.';
     try std.testing.expectError(error.CorruptMetadata, parseParent(&dot));
 }
+
+test "fuzzable: parseParent rejects corrupt metadata and never panics" {
+    try std.testing.fuzz({}, fuzzParseParent, .{ .corpus = &.{
+        "\x30\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00test\x00\x00\x00\x00",
+        "\x00",
+        "",
+    } });
+}
+
+fn fuzzParseParent(_: void, smith: *std.testing.Smith) !void {
+    var buf: [512]u8 = undefined;
+    const len = smith.slice(&buf);
+    const input = buf[0..len];
+    if (parseParent(input)) |parsed| {
+        try std.testing.expect(parsed.size <= input.len);
+        if (parsed.parent) |parent| {
+            try std.testing.expect(linux.validName(parent.name));
+            try std.testing.expectEqual(@as(usize, 14), parent.handle.length);
+        }
+    } else |err| {
+        try std.testing.expectEqual(error.CorruptMetadata, err);
+    }
+}
