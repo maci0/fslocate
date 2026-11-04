@@ -220,8 +220,9 @@ pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: [
     var started: usize = 0;
     spawn: while (started + 1 < opts.threads) : (started += 1) {
         threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch {
-            search.report(root, error.ThreadSpawnFailed);
             if (started == 0) return error.ThreadSpawnFailed;
+            // Partial spawn: remaining workers + main thread fully cover the
+            // queue. Silently degrade; failure would imply incomplete search.
             break :spawn;
         };
     }
