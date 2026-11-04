@@ -17,7 +17,7 @@ pub fn main(init: std.process.Init) void {
     if (code != 0) std.process.exit(code);
 }
 
-const version = "0.3.0";
+const version = "0.4.0";
 
 const help =
     \\fslocate: search live filesystem metadata; no database
@@ -63,20 +63,20 @@ const schema_search_command =
 ;
 
 const schema_document =
-    \\{"clispec":"0.3","name":"fslocate","version":"0.3.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
+    \\{"clispec":"0.3","name":"fslocate","version":"0.4.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
 ++ schema_command ++
     "," ++ schema_search_command ++
     \\],"errors":[{"kind":"usage","exit_code":2,"retryable":false,"description":"Unknown option, missing PATTERN, or a rejected flag value."},{"kind":"failure","exit_code":2,"retryable":true,"description":"The search could not be completed, or native metadata access was denied."}],"outcomes":[{"code":1,"name":"no_match","description":"No path contained PATTERN. Stdout is empty in text mode and an empty items array in JSON. Not an error."}]}
 ;
 
 const schema_schema =
-    \\{"clispec":"0.3","name":"fslocate","version":"0.3.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
+    \\{"clispec":"0.3","name":"fslocate","version":"0.4.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
 ++ schema_command ++
     \\],"errors":[{"kind":"usage","exit_code":2,"retryable":false,"description":"Unknown option, missing PATTERN, or a rejected flag value."},{"kind":"failure","exit_code":2,"retryable":true,"description":"The search could not be completed, or native metadata access was denied."}],"outcomes":[{"code":1,"name":"no_match","description":"No path contained PATTERN. Stdout is empty in text mode and an empty items array in JSON. Not an error."}]}
 ;
 
 const schema_search =
-    \\{"clispec":"0.3","name":"fslocate","version":"0.3.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
+    \\{"clispec":"0.3","name":"fslocate","version":"0.4.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[
 ++ schema_search_command ++
     \\],"errors":[{"kind":"usage","exit_code":2,"retryable":false,"description":"Unknown option, missing PATTERN, or a rejected flag value."},{"kind":"failure","exit_code":2,"retryable":true,"description":"The search could not be completed, or native metadata access was denied."}],"outcomes":[{"code":1,"name":"no_match","description":"No path contained PATTERN. Stdout is empty in text mode and an empty items array in JSON. Not an error."}]}
 ;

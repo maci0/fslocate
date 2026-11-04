@@ -631,7 +631,7 @@ class ClispecTests(unittest.TestCase):
         doc = json.loads(result.stdout)
         self.assertEqual(doc["clispec"], "0.3")
         self.assertEqual(doc["name"], "fslocate")
-        self.assertEqual(doc["version"].encode(), self.declared_version())
+        self.assertEqual(doc["version"].encode(), SearchTests.declared_version(self))
         self.assertEqual(doc["output"]["piped"], "text")
         names = [command["name"] for command in doc["commands"]]
         self.assertEqual(names, ["schema", "search"])

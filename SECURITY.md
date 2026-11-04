@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.3.x (current) | Yes — fixes land on the latest release |
-| < 0.3.0 | No |
+| 0.4.x (current) | Yes — fixes land on the latest release |
+| < 0.4.0 | No |
 
 ## Reporting a vulnerability
 

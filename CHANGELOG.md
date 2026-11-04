@@ -18,6 +18,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-05
+
 ### Fixed
 
 - JSON and text output-error reports now name the failing stream
@@ -29,13 +31,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `root does not exist or is not accessible` instead of the raw error name.
 - Retry `fstatfs` on `EINTR` when detecting the root filesystem, so a
   signal-interrupted syscall no longer fails the search.
-- Report thread-spawn failure in directory search instead of silently
-  degrading to fewer workers with no diagnostic.
+- Directory search falls back to fewer workers after a partial thread-spawn failure; failure to start the first worker is reported.
 
 ### Documentation
 
 - Added this changelog and a `SECURITY.md` support policy
-  (`0.3.x` only; `< 0.3.0` unsupported, fixes on latest release only).
+  (`0.4.x` only; `< 0.4.0` unsupported, fixes on latest release only).
 
 ## [0.3.0] - 2026-10-21
 
@@ -79,6 +80,7 @@ index, or daemon (`-i`, `-0`, `-r`, `-b auto|native|walk`, `-j`, `-o
 auto|text|json`, `--limit`, `--offset`, `--fields path`, `schema`, exit
 codes 0/1/2).
 
-[Unreleased]: https://github.com/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/releases/tag/v0.2.0
+[Unreleased]: https://github.com/maci0/fslocate/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/maci0/fslocate/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/maci0/fslocate/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/maci0/fslocate/releases/tag/v0.2.0

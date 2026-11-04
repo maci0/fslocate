@@ -1,6 +1,6 @@
 [project]
 name = "fslocate"
-version = "0.3.0"
+version = "0.4.0"
 description = "Find paths using live filesystem metadata"
 requires-python = ">=3.11"
 

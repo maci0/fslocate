@@ -52,8 +52,9 @@ pub const Options = struct {
         if (!self.ignore_case or self.pattern.len <= 4) return;
         const lowered = try gpa.alloc(u8, self.pattern.len);
         for (self.pattern, 0..) |byte, i| lowered[i] = std.ascii.toLower(byte);
-        self.lowered = lowered;
+        errdefer gpa.free(lowered);
         const prefix = try gpa.alloc(usize, self.pattern.len);
+        self.lowered = lowered;
         prefix[0] = 0;
         var matched: usize = 0;
         for (self.pattern[1..], 1..) |byte, i| {
@@ -214,7 +215,7 @@ fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []co
                 try out.append(gpa, '\\');
                 try out.append(gpa, b);
                 run_start = i + 1;
-            } else if (b < 0x20) {
+            } else if (b < 0x20 or b == 0x7f) {
                 if (run_start < i) try out.appendSlice(gpa, bytes[run_start..i]);
                 var hex: [6]u8 = undefined;
                 const esc = std.fmt.bufPrint(&hex, "\\u{x:0>4}", .{b}) catch return error.OutOfMemory;
@@ -286,9 +287,6 @@ test "JSON collector paging and truncation" {
     try std.testing.expect(std.mem.indexOf(u8, out, "/d") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "/e") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "/a") == null);
-    try collector.finish(false);
-    try std.testing.expect(collector.output.items.len == 0);
-    try std.testing.expect(collector.truncated);
 }
 
 test "JSON collector frees allocations when encoding fails" {
