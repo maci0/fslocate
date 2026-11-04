@@ -69,9 +69,14 @@ pub const StatFs = extern struct {
 
 pub fn statFs(fd: i32) !StatFs {
     var stat: StatFs = undefined;
-    const result = linux.syscall2(.fstatfs, @intCast(fd), @intFromPtr(&stat));
-    if (linux.errno(result) != .SUCCESS) return error.FilesystemDetectionFailed;
-    return stat;
+    while (true) {
+        const result = linux.syscall2(.fstatfs, @intCast(fd), @intFromPtr(&stat));
+        switch (linux.errno(result)) {
+            .SUCCESS => return stat,
+            .INTR => continue,
+            else => return error.FilesystemDetectionFailed,
+        }
+    }
 }
 
 pub fn syncFs(fd: i32) !void {
