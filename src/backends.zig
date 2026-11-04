@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const common = @import("common.zig");
 const directory = @import("directory.zig");
+const linux = @import("linux.zig");
 
 const registry = .{
     @import("btrfs.zig"),
@@ -32,7 +33,7 @@ pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []
         if (opts.backend == .native) return error.NativeUnsupported;
         return directory.search(io, gpa, opts, root, dir, collector);
     }
-    const magic = (try @import("linux.zig").statFs(dir.handle)).kind;
+    const magic = (try linux.statFs(dir.handle)).kind;
     inline for (registry) |Backend| {
         if (Backend.supports(magic)) {
             if (comptime Backend.native) {

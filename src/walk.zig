@@ -1,7 +1,9 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const common = @import("common.zig");
+const linux = @import("linux.zig");
 const Options = common.Options;
 
 fn Search(comptime Reader: type) type {
@@ -56,8 +58,8 @@ fn Search(comptime Reader: type) type {
             const start = self.root.len + @intFromBool(self.root[self.root.len - 1] != '/');
             if (std.mem.indexOfScalar(u8, directory[start..], '/') == null)
                 return self.root_dir.openDir(self.io, directory[start..], .{ .iterate = true, .follow_symlinks = false });
-            if (comptime @import("builtin").os.tag == .linux) {
-                if (@import("linux.zig").openDirNoSymlinks(self.root_dir.handle, directory[start..])) |dir|
+            if (comptime builtin.os.tag == .linux) {
+                if (linux.openDirNoSymlinks(self.root_dir.handle, directory[start..])) |dir|
                     return dir;
             }
             var components = std.mem.splitScalar(u8, directory[start..], '/');

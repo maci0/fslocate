@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("common.zig");
 const linux = @import("linux.zig");
 const directory = @import("directory.zig");
+const walk = @import("walk.zig");
 
 pub const name = "btrfs";
 pub const native = true;
@@ -173,7 +174,7 @@ pub fn probe(io: std.Io, dir: std.Io.Dir) !void {
 }
 
 pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, dir: std.Io.Dir, collector: *common.Collector) !u8 {
-    return @import("walk.zig").run(Reader, io, gpa, opts, root, dir, collector);
+    return walk.run(Reader, io, gpa, opts, root, dir, collector);
 }
 
 test "Btrfs ioctl ABI" {

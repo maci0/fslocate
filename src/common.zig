@@ -63,7 +63,7 @@ pub const Options = struct {
     pub inline fn matches(self: Options, path: []const u8) bool {
         // Short paths favor the simple scan; KMP bounds work on long repetitive paths.
         if (self.prefix.len == 0 or path.len < 256)
-            return @import("common.zig").matches(path, self.pattern, self.ignore_case);
+            return matchesFree(path, self.pattern, self.ignore_case);
         if (self.pattern.len > path.len) return false;
         var matched: usize = 0;
         for (path) |byte| {
@@ -229,7 +229,7 @@ fn appendJsonString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []co
 
 pub const Backend = enum { auto, native, walk };
 
-pub fn matches(path: []const u8, pattern: []const u8, ignore_case: bool) bool {
+pub fn matchesFree(path: []const u8, pattern: []const u8, ignore_case: bool) bool {
     if (!ignore_case) return std.mem.indexOf(u8, path, pattern) != null;
     return std.ascii.findIgnoreCase(path, pattern) != null;
 }

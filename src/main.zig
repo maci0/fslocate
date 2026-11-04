@@ -1,6 +1,23 @@
 const std = @import("std");
 const Io = std.Io;
 
+const common = @import("common.zig");
+const Options = common.Options;
+const matches = common.matchesFree;
+const backends = @import("backends.zig");
+
+
+pub fn main(init: std.process.Init) void {
+    const code = run(init) catch |err| blk: {
+        if (err == error.BrokenPipe) break :blk 0;
+        if (err != error.InvalidArguments) {
+            _ = report(init.io, false, "failure", "search failed", "see --help") catch {};
+        }
+        break :blk @as(u8, 2);
+    };
+    if (code != 0) std.process.exit(code);
+}
+
 const version = "0.3.0";
 
 const help =
@@ -57,11 +74,6 @@ const schema_schema =
 const schema_search =
     \\{"clispec":"0.3","name":"fslocate","version":"0.3.0","description":"Search live filesystem metadata with no database.","output":{"tty":"text","piped":"text"},"global_args":[{"name":"--output","short":"-o","type":"string","enum":["auto","text","json"],"default":"auto","description":"Output format. auto and text print one path per line (NUL with -0). json prints one document."}],"commands":[{"name":"search","description":"Print absolute paths that contain PATTERN. Invoked as `fslocate [options] PATTERN [ROOT]`. The word search is optional. A retry is safe: the command only reads directory metadata. Results are unsorted, so --offset follows arrival order and is not stable across runs.","effects":"read_only","cardinality":"unbounded","pagination":{"style":"offset","offset_arg":"--offset","limit_arg":"--limit"},"fields_arg":"--fields","args":[{"name":"PATTERN","type":"string","required":true,"description":"Literal substring of the absolute path."},{"name":"ROOT","type":"path","description":"Directory to search. Defaults to the current directory."},{"name":"--ignore-case","short":"-i","type":"boolean","description":"Ignore ASCII case."},{"name":"--null","short":"-0","type":"boolean","description":"Separate text-mode paths with NUL."},{"name":"--root","short":"-r","type":"path","description":"Directory to search, instead of the positional ROOT."},{"name":"--backend","short":"-b","type":"string","enum":["auto","native","walk"],"default":"auto"},{"name":"--threads","short":"-j","type":"integer","description":"Worker threads, 1 to 256."},{"name":"--limit","type":"integer","description":"Maximum matches to emit. JSON sets truncated when more exist."},{"name":"--offset","type":"integer","default":0,"description":"Matches to skip before emitting."},{"name":"--fields","type":"string","description":"Comma-separated item fields: path, path_bytes_base64. Raw-byte identity accompanies non-UTF-8 paths even when only path is selected."}],"output_fields":[{"name":"path","type":"string","description":"Absolute UTF-8 path, or display text when path_bytes_base64 is present."},{"name":"path_bytes_base64","type":"string","description":"Lossless absolute path bytes in standard base64. Present when requested or when path is not valid UTF-8, including with --fields path."}],"outcomes":["no_match"],"errors":["usage","failure"]}],"errors":[{"kind":"usage","exit_code":2,"retryable":false,"description":"Unknown option, missing PATTERN, or a rejected flag value."},{"kind":"failure","exit_code":2,"retryable":true,"description":"The search could not be completed, or native metadata access was denied."}],"outcomes":[{"code":1,"name":"no_match","description":"No path contained PATTERN. Stdout is empty in text mode and an empty items array in JSON. Not an error."}]}
 ;
-
-const common = @import("common.zig");
-const Options = common.Options;
-const matches = common.matches;
-const backends = @import("backends.zig");
 
 const Format = enum { auto, text, json };
 
@@ -300,17 +312,6 @@ fn run(init: std.process.Init) !u8 {
             "see --help";
         return report(init.io, opts.json, "failure", message, hint);
     };
-}
-
-pub fn main(init: std.process.Init) void {
-    const code = run(init) catch |err| blk: {
-        if (err == error.BrokenPipe) break :blk 0;
-        if (err != error.InvalidArguments) {
-            _ = report(init.io, false, "failure", "search failed", "see --help") catch {};
-        }
-        break :blk @as(u8, 2);
-    };
-    if (code != 0) std.process.exit(code);
 }
 
 test "literal byte matching" {
