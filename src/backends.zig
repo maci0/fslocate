@@ -6,7 +6,8 @@ const directory = @import("directory.zig");
 const registry = .{
     @import("btrfs.zig"),
     @import("xfs.zig"),
-    @import("ext.zig"),
+    // ext's HTree indexes individual directories; its ioctl API has no filename tree search.
+    directory.Backend("ext2/ext3/ext4", 0xef53),
     directory.Backend("tmpfs", 0x01021994),
     directory.Backend("ramfs", 0x858458f6),
     directory.Backend("F2FS", 0xf2f52010),

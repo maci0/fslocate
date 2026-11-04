@@ -90,10 +90,7 @@ fn takeValue(args: []const []const u8, i: *usize, attached: ?[]const u8) ?[]cons
 }
 
 fn parseFormat(value: []const u8) ?Format {
-    if (std.mem.eql(u8, value, "auto")) return .auto;
-    if (std.mem.eql(u8, value, "text")) return .text;
-    if (std.mem.eql(u8, value, "json")) return .json;
-    return null;
+    return std.meta.stringToEnum(Format, value);
 }
 
 fn explicitJson(args: []const []const u8) bool {

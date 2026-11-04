@@ -231,11 +231,7 @@ pub const Backend = enum { auto, native, walk };
 
 pub fn matches(path: []const u8, pattern: []const u8, ignore_case: bool) bool {
     if (!ignore_case) return std.mem.indexOf(u8, path, pattern) != null;
-    if (pattern.len > path.len) return false;
-    for (0..path.len - pattern.len + 1) |i| {
-        if (std.ascii.eqlIgnoreCase(path[i..][0..pattern.len], pattern)) return true;
-    }
-    return false;
+    return std.ascii.findIgnoreCase(path, pattern) != null;
 }
 
 fn collectWithAllocationFailures(gpa: std.mem.Allocator) !void {
