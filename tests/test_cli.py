@@ -716,6 +716,34 @@ class ClispecTests(unittest.TestCase):
         payload = json.loads(encoded.stdout)
         self.assertTrue(any(item["path"].endswith("raw-\u00ff") for item in payload["items"]))
 
+    def test_numeric_arguments_reject_overflow_and_garbage(self):
+        import json
+
+        # parseInt(usize) must reject out-of-range values at the trust
+        # boundary (CLI args) rather than truncating or wrapping. Zig's
+        # stdlib parser already enforces range checks; pin them so a
+        # future switch to unchecked parsing fails loudly.
+        for option in ("--limit", "--offset", "--threads"):
+            for value in ("18446744073709551616", "999999999999999999999999999999", "0x10", "", " 5", "-1"):
+                with self.subTest(option=option, value=value):
+                    result = subprocess.run(
+                        [BINARY, "-o", "json", option, value, "x", self.root],
+                        capture_output=True,
+                        timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 2, (option, value, result.stderr))
+                    self.assertEqual(result.stdout, b"")
+        # Huge-but-valid values must behave as unbounded, not wrap.
+        result = subprocess.run(
+            [BINARY, "-o", "json", "--limit", "18446744073709551615", "README", self.root],
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(result.stdout)
+        self.assertEqual(document["total"], len(document["items"]))
+        self.assertNotIn("truncated", document)
+
 
 if __name__ == "__main__":
     unittest.main()

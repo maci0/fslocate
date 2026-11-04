@@ -1,6 +1,8 @@
 import contextlib
 import io
 import json
+import statistics
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -121,3 +123,24 @@ class FixtureTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as error:
                     self.cli("--fixture", self.folder, "--binary", sys.executable)
                 self.assertEqual(error.exception.code, 2)
+
+    def test_benchmark_ratios_guard_zero_denominators(self):
+        # benchmark() must not raise ZeroDivisionError on 0ms samples
+        # (perf_counter_ns / getrusage deltas are floats). The wall ratio
+        # previously divided by new[0] unguarded, unlike the CPU ratio.
+        completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        usage = type("R", (), {"ru_utime": 0.0, "ru_stime": 0.0})()
+        with (
+            patch.object(benchmark, "verify", return_value=0),
+            patch.object(benchmark, "run", return_value=completed),
+            patch("time.perf_counter_ns", side_effect=[0, 0, 0, 0]),
+            patch("resource.getrusage", side_effect=[usage, usage, usage, usage]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            tools = {"before walk j1": ["/bin/true"], "current walk j1": ["/bin/true"]}
+            try:
+                benchmark.benchmark(tools, set(), "selective", 1)
+            except statistics.StatisticsError:
+                pass  # all-zero denominators -> median of empty; acceptable
+            except ZeroDivisionError as error:
+                self.fail(f"benchmark raised ZeroDivisionError on zero samples: {error}")

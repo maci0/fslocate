@@ -258,7 +258,11 @@ def benchmark(tools, expected, case, runs):
         before = samples.get(f"before walk j{threads}")
         if before:
             current = samples[f"current walk j{threads}"]
-            wall = statistics.median(old[0] / new[0] for old, new in zip(before, current))
+            # Guard zero denominators: perf_counter_ns deltas and
+            # getrusage deltas are floats; a 0ms sample would raise
+            # ZeroDivisionError and lose the whole report. Keep only
+            # pairs with a non-zero denominator (matches CPU filter below).
+            wall = statistics.median(old[0] / new[0] for old, new in zip(before, current) if new[0] > 0)
             cpu = [old[1] / new[1] for old, new in zip(before, current) if new[1] > 0]
             print(
                 f"before/current j{threads}: {wall:.2f}x wall; {statistics.median(cpu):.2f}x CPU",
