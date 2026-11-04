@@ -229,3 +229,25 @@ test "Btrfs directory item bounds and filename validation" {
     oversize[25] = 100; // data_len
     try std.testing.expectError(error.CorruptMetadata, parseEntry(&oversize));
 }
+
+test "fuzzable: parseEntry rejects corrupt metadata and never panics" {
+    try std.testing.fuzz({}, fuzzParseEntry, .{ .corpus = &.{
+        "\x2a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x01test",
+        "\x00",
+        "",
+    } });
+}
+
+fn fuzzParseEntry(_: void, smith: *std.testing.Smith) !void {
+    var buf: [512]u8 = undefined;
+    const len = smith.slice(&buf);
+    const input = buf[0..len];
+    if (parseEntry(input)) |parsed| {
+        // Invariants: size within bounds, name valid, inode round-trips.
+        try std.testing.expect(parsed.size <= input.len);
+        try std.testing.expect(linux.validName(parsed.entry.name));
+        try std.testing.expectEqual(parsed.entry.inode, std.mem.readInt(u64, input[0..8], .little));
+    } else |err| {
+        try std.testing.expectEqual(error.CorruptMetadata, err);
+    }
+}
