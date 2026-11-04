@@ -6,7 +6,6 @@ const Options = common.Options;
 const matches = common.matchesFree;
 const backends = @import("backends.zig");
 
-
 pub fn main(init: std.process.Init) void {
     const code = run(init) catch |err| blk: {
         if (err == error.BrokenPipe) break :blk 0;
