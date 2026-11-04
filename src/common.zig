@@ -61,7 +61,6 @@ pub const Options = struct {
     }
 
     pub inline fn matches(self: Options, path: []const u8) bool {
-        // Short paths favor the simple scan; KMP bounds work on long repetitive paths.
         if (self.prefix.len == 0 or path.len < 256)
             return matchesFree(path, self.pattern, self.ignore_case);
         if (self.pattern.len > path.len) return false;
@@ -241,10 +240,8 @@ fn collectWithAllocationFailures(gpa: std.mem.Allocator) !void {
 }
 
 test "JSON collector paging and truncation" {
-    // offset/limit/truncated/total are critical paging contract; exercise every Decision.
     var collector: Collector = .{ .io = std.testing.io, .gpa = std.testing.allocator, .offset = 2, .limit = 2, .json = true, .pretty = false };
     defer collector.deinit();
-    // seen: 0,1 skipped by offset; 2,3 emitted (kept==limit -> last handled next); 4 triggers done+truncated.
     try std.testing.expectEqual(.skip, try collector.consider("/a"));
     try std.testing.expectEqual(.skip, try collector.consider("/b"));
     try std.testing.expectEqual(.emit, try collector.consider("/c"));
@@ -253,11 +250,6 @@ test "JSON collector paging and truncation" {
     try std.testing.expect(collector.truncated);
     try std.testing.expectEqual(@as(usize, 5), collector.seen);
     try std.testing.expectEqual(@as(usize, 2), collector.kept);
-    try std.testing.expect(collector.truncated);
-    try std.testing.expectEqual(@as(usize, 5), collector.seen);
-    try std.testing.expectEqual(@as(usize, 2), collector.kept);
-    // JSON document must contain exactly emitted items and truncated flag, no total.
-    // (Checked before finish(), which flushes and clears the buffer.)
     const out = collector.output.items;
     try std.testing.expect(std.mem.indexOf(u8, out, "\"items\":[") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "/c") != null);
@@ -265,7 +257,7 @@ test "JSON collector paging and truncation" {
     try std.testing.expect(std.mem.indexOf(u8, out, "/e") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "/a") == null);
     try collector.finish(false);
-    try std.testing.expect(collector.output.items.len == 0); // flushed
+    try std.testing.expect(collector.output.items.len == 0);
     try std.testing.expect(collector.truncated);
 }
 
@@ -274,25 +266,22 @@ test "JSON collector frees allocations when encoding fails" {
 }
 
 test "prepared case-insensitive patterns handle overlaps and raw bytes" {
-    // preparePattern only builds KMP table for pattern.len > 4; verify both branches agree.
     const long: [512]u8 = @splat('a');
     const long_hit = long ++ "B/\xffAbCd/MiXeD/AAABAAAB";
     for ([_][]const u8{ "aAaAaB", "aaaab", "AAABAAAB", "mixed", "\xffAbCd", "", "ab" }) |pattern| {
         var opts: Options = .{ .pattern = pattern, .ignore_case = true, .threads = 1 };
         try opts.preparePattern(std.testing.allocator);
         defer std.testing.allocator.free(opts.prefix);
-        // Short patterns (<=4) must skip allocation; long patterns must not.
         try std.testing.expectEqual(pattern.len <= 4, opts.prefix.len == 0);
         for ([_][]const u8{ "", "a", "aaaaaaaaab", "aaabaaabaaab", "/MiXeD/path", "\xffaBcD", "other", &long, long_hit }) |path| {
             try std.testing.expectEqual(std.ascii.findIgnoreCase(path, pattern) != null, opts.matches(path));
         }
     }
-    // Options.matches must exercise KMP branch for long paths (>=256): verify long_hit hit/miss.
     var kmp: Options = .{ .pattern = "AAABAAAB", .ignore_case = true, .threads = 1 };
     try kmp.preparePattern(std.testing.allocator);
     defer std.testing.allocator.free(kmp.prefix);
     try std.testing.expect(kmp.matches(long_hit));
-    const long_miss = long ++ "B/\xffAbCd/MiXeD/AAABAAAA"; // truncated final char
+    const long_miss = long ++ "B/\xffAbCd/MiXeD/AAABAAAA";
     try std.testing.expect(!kmp.matches(long_miss));
 }
 
@@ -325,16 +314,13 @@ fn fuzzJsonPath(_: void, smith: *std.testing.Smith) !void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     try appendJsonString(&out, std.testing.allocator, input);
-    // Invariant: output is a quoted JSON string; unescaped bytes only in
-    // printable ASCII range, valid UTF-8 sequences pass through, others \uXXXX.
+    // Output is a quoted JSON string; bytes are escaped as \uXXXX unless printable ASCII or valid UTF-8.
     try std.testing.expect(out.items.len >= 2);
     try std.testing.expectEqual(@as(u8, '"'), out.items[0]);
     try std.testing.expectEqual(@as(u8, '"'), out.items[out.items.len - 1]);
-    // Validate with std.json: the encoded string must parse back.
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out.items, .{});
     defer parsed.deinit();
     try std.testing.expect(parsed.value == .string);
-    // Base64 round-trip when the path is not valid UTF-8.
     if (!std.unicode.utf8ValidateSlice(input)) {
         var fields_out: std.ArrayList(u8) = .empty;
         defer fields_out.deinit(std.testing.allocator);
@@ -356,13 +342,11 @@ fn fuzzMatches(_: void, smith: *std.testing.Smith) !void {
     const path = path_buf[0..path_len];
     const pattern = pat_buf[0..pat_len];
     const ignore_case = smith.value(bool);
-    // Oracle: std.mem.indexOf / std.ascii.findIgnoreCase
     const expected = if (ignore_case)
         std.ascii.findIgnoreCase(path, pattern) != null
     else
         std.mem.indexOf(u8, path, pattern) != null;
     try std.testing.expectEqual(expected, matchesFree(path, pattern, ignore_case));
-    // KMP path (Options.matches with preparePattern) must agree for long paths.
     if (pattern.len > 4 and path.len >= 256) {
         var opts: Options = .{ .pattern = pattern, .ignore_case = ignore_case, .threads = 1 };
         try opts.preparePattern(std.testing.allocator);

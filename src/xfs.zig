@@ -218,7 +218,6 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
     defer output.deinit(gpa);
     var found = false;
     var args: BulkArgs = .{ .header = .{}, .records = undefined };
-    // shortcut: XFS parent queries run serially, parallelize if profiling shows a bottleneck.
     scan: while (true) {
         const start_inode = args.header.inode;
         try linux.ioctl(dir.handle, bulkstat, &args);
@@ -236,7 +235,6 @@ pub fn search(io: std.Io, gpa: Allocator, opts: common.Options, root: []const u8
                 if (opts.matches(path)) {
                     found = true;
                     const decision = collector.consider(path) catch |err| {
-                        // Text mode has no later reporter; JSON mode is reported by caller via output_error.
                         if (!collector.json and err != error.BrokenPipe) common.reportSearchError(gpa, false, "stdout", err);
                         return err;
                     };
@@ -313,7 +311,6 @@ test "XFS parent records reject invalid lengths and names" {
     try std.testing.expectError(error.CorruptMetadata, parseParent(data[0..39]));
     data[33] = '/';
     try std.testing.expectError(error.CorruptMetadata, parseParent(&data));
-    // length==0 terminator yields null parent
     var term: [32]u8 = @splat(0);
     @memcpy(term[0..32], std.mem.asBytes(&header));
     var term_header = header;
@@ -322,14 +319,12 @@ test "XFS parent records reject invalid lengths and names" {
     const term_parsed = try parseParent(&term);
     try std.testing.expect(term_parsed.parent == null);
     try std.testing.expectEqual(@as(usize, 32), term_parsed.size);
-    // length % 8 != 0
     var bad_len: [40]u8 = @splat(0);
     var bad_header = header;
     bad_header.length = 39;
     @memcpy(bad_len[0..32], std.mem.asBytes(&bad_header));
     @memcpy(bad_len[32..36], "test");
     try std.testing.expectError(error.CorruptMetadata, parseParent(&bad_len));
-    // handle.length != 14
     var bad_handle: [40]u8 = @splat(0);
     var bad_h = header;
     bad_h.handle.length = 13;
@@ -337,11 +332,9 @@ test "XFS parent records reject invalid lengths and names" {
     @memcpy(bad_handle[0..32], std.mem.asBytes(&bad_h));
     @memcpy(bad_handle[32..36], "test");
     try std.testing.expectError(error.CorruptMetadata, parseParent(&bad_handle));
-    // missing NUL terminator (non-zero tail)
     var no_nul: [40]u8 = @splat('x');
     @memcpy(no_nul[0..32], std.mem.asBytes(&header));
     try std.testing.expectError(error.CorruptMetadata, parseParent(&no_nul));
-    // invalid name "." rejected by validName
     var dot: [40]u8 = @splat(0);
     @memcpy(dot[0..32], std.mem.asBytes(&header));
     dot[32] = '.';

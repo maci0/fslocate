@@ -110,16 +110,13 @@ test "openat2 rejects directory symlinks" {
 }
 
 test "metadata names cannot introduce path components" {
-    // validName boundary: 255 ok, 256 reject, NUL, slash, dot variants already covered.
     try std.testing.expect(validName("raw-\xff"));
     for ([_][]const u8{ "", ".", "..", "a/b", "a\x00b" }) |name|
         try std.testing.expect(!validName(name));
-    // 255-byte max valid, 256 invalid
     const max_name: [255]u8 = @splat('a');
     try std.testing.expect(validName(&max_name));
     const over_name: [256]u8 = @splat('a');
     try std.testing.expect(!validName(&over_name));
-    // single char valid, hidden ".x" valid (not "." or "..")
     try std.testing.expect(validName("a"));
     try std.testing.expect(validName(".hidden"));
 }

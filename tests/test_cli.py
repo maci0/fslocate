@@ -1,5 +1,8 @@
+import base64
 import fcntl
+import json
 import os
+import resource
 import shutil
 import subprocess
 import tempfile
@@ -160,7 +163,6 @@ class SearchTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "requires resource limits")
     def test_worker_creation_limit_uses_fewer_threads(self):
-        import resource
 
         def limit_memory():
             resource.setrlimit(resource.RLIMIT_AS, (64 * 1024 * 1024,) * 2)
@@ -346,7 +348,6 @@ class SearchTests(unittest.TestCase):
         self.assertIn(b"stdout", result.stderr)
 
     def test_json_output_error_is_reported_once(self):
-        import json
 
         for i in range(STREAMING_ENTRIES):
             (self.root / (f"entry-{i}-" + "x" * 100)).touch()
@@ -419,7 +420,6 @@ class ClispecTests(unittest.TestCase):
         (self.root / "nested" / "notes.txt").touch()
 
     def test_usage_errors_follow_the_effective_output_option(self):
-        import json
 
         for args, structured in (
             (["-r", "--", "-o", "json"], True),
@@ -441,7 +441,6 @@ class ClispecTests(unittest.TestCase):
 
     @unittest.skipIf(os.geteuid() == 0, "root bypasses directory permissions")
     def test_json_directory_errors_are_json_lines_with_context(self):
-        import json
 
         blocked = self.root / 'blocked-"\nname'
         blocked.mkdir()
@@ -467,7 +466,6 @@ class ClispecTests(unittest.TestCase):
 
     @unittest.skipUnless(Path("/dev/shm").is_dir(), "requires tmpfs mount")
     def test_unsupported_native_json_errors_have_no_text_prefix(self):
-        import json
 
         result = subprocess.run(
             [BINARY, "-o", "json", "-b", "native", "-r", "/dev/shm", ""],
@@ -478,8 +476,6 @@ class ClispecTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stderr)["error"]["kind"], "failure")
 
     def test_json_preserves_distinct_raw_path_identities(self):
-        import base64
-        import json
 
         expected = {
             os.fsencode(self.root) + b"/raw-\xff",
@@ -572,7 +568,6 @@ class ClispecTests(unittest.TestCase):
         "requires Linux pipe and process inspection",
     )
     def test_json_streams_before_finishing_the_tree(self):
-        import json
 
         child = self.root / "child"
         child.mkdir()
@@ -609,7 +604,6 @@ class ClispecTests(unittest.TestCase):
         self.assertIn({"path": str(late)}, document["items"])
 
     def test_schema_is_offline_json(self):
-        import json
 
         result = subprocess.run([BINARY, "schema"], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -642,7 +636,6 @@ class ClispecTests(unittest.TestCase):
         )
 
     def test_json_items_text_mode_and_usage_envelope(self):
-        import json
 
         listed = subprocess.run(
             [

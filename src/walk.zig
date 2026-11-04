@@ -66,7 +66,6 @@ fn Search(comptime Reader: type) type {
             var dir = self.root_dir;
             var owned = false;
             errdefer if (owned) dir.close(self.io);
-            // Open each component from its parent: no intermediate symlinks or PATH_MAX limit.
             while (components.next()) |component| {
                 const next = try dir.openDir(self.io, component, .{ .iterate = true, .follow_symlinks = false });
                 if (owned) dir.close(self.io);
@@ -111,8 +110,6 @@ fn Search(comptime Reader: type) type {
                     self.found.store(true, .monotonic);
                     const decision = self.collector.consider(path.items) catch |err| {
                         if (err != error.BrokenPipe) {
-                            // JSON mode: main reports stdout once via collector.output_error; avoid duplicate.
-                            // Text mode: no later reporter exists, so report here.
                             if (self.collector.json) self.failed.store(true, .monotonic) else self.report("stdout", err);
                         }
                         self.stop();
