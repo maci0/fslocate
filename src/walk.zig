@@ -220,8 +220,8 @@ pub fn run(comptime Reader: type, io: Io, gpa: Allocator, opts: Options, root: [
     var started: usize = 0;
     spawn: while (started + 1 < opts.threads) : (started += 1) {
         threads[started] = std.Thread.spawn(.{}, Search(Reader).worker, .{&search}) catch {
-            search.report(root, error.ThreadSpawnFailed);
-            if (started == 0) return error.ThreadSpawnFailed;
+            // Thread creation reached a system limit: use fewer workers.
+            // The main thread below still runs as a worker, so continue.
             break :spawn;
         };
     }
