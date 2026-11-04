@@ -185,6 +185,7 @@ test "Btrfs ioctl ABI" {
 }
 
 test "Btrfs directory item bounds and filename validation" {
+    // Gaps: unknown kind, kind masking (0x7f), size overflow, empty name, dot names.
     var data: [34]u8 = @splat(0);
     data[0] = 42;
     data[27] = 4;
@@ -197,4 +198,34 @@ test "Btrfs directory item bounds and filename validation" {
     try std.testing.expectError(error.CorruptMetadata, parseEntry(data[0..33]));
     data[31] = '/';
     try std.testing.expectError(error.CorruptMetadata, parseEntry(&data));
+    // unknown kind byte 8
+    var kind_data = data;
+    kind_data[31] = 'e'; // restore valid name "test"
+    kind_data[29] = 8;
+    try std.testing.expectError(error.CorruptMetadata, parseEntry(&kind_data));
+    // kind 0 => unknown
+    var kind0 = data;
+    kind0[31] = 'e';
+    kind0[29] = 0;
+    try std.testing.expectEqual(.unknown, (try parseEntry(&kind0)).entry.kind);
+    // kind masking: 0x81 -> file (1 & 0x7f)
+    var kind_mask = data;
+    kind_mask[31] = 'e';
+    kind_mask[29] = 0x81;
+    try std.testing.expectEqual(.file, (try parseEntry(&kind_mask)).entry.kind);
+    // empty name (name_len 0)
+    var empty_name = data;
+    empty_name[31] = 'e';
+    empty_name[27] = 0;
+    try std.testing.expectError(error.CorruptMetadata, parseEntry(&empty_name));
+    // dot name
+    var dot = data;
+    dot[27] = 1;
+    dot[30] = '.';
+    try std.testing.expectError(error.CorruptMetadata, parseEntry(&dot));
+    // size field causing overflow beyond buffer
+    var oversize = data;
+    oversize[31] = 'e';
+    oversize[25] = 100; // data_len
+    try std.testing.expectError(error.CorruptMetadata, parseEntry(&oversize));
 }

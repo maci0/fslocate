@@ -327,6 +327,36 @@ test "literal byte matching" {
     try expect(matches("", "", true));
     try expect(!matches("a", "longer", false));
     try expect(!matches("a", "longer", true));
+    // Gaps: ignore-case with pattern longer than path, empty pattern vs non-empty path, raw-byte non-match.
+    try expect(!matches("Ab", "aBcd", true));
+    try expect(!matches("Ab", "abcd", true));
+    try expect(matches("anything", "", false));
+    try expect(matches("anything", "", true));
+    try expect(!matches("\xff", "\xfe", false));
+    try expect(!matches("\xff", "\xfe", true));
+    try expect(matches("AbC", "aBc", true));
+    try expect(matches("/a/b", "/a/b", false)); // exact equality
+    try expect(!matches("/a/b", "/a/c", false));
+    try expect(matches("a", "a", true));
+}
+
+test "option parsing helpers" {
+    // splitOption / takesValue / parseFormat are public CLI contract; pin behavior.
+    const opt = splitOption("--root=/tmp");
+    try std.testing.expectEqualStrings("--root", opt.name);
+    try std.testing.expectEqualStrings("/tmp", opt.value.?);
+    const no_eq = splitOption("--root");
+    try std.testing.expect(no_eq.value == null);
+    try std.testing.expect(takesValue("--root"));
+    try std.testing.expect(takesValue("-j"));
+    try std.testing.expect(!takesValue("--help"));
+    try std.testing.expect(!takesValue("-i"));
+    try std.testing.expectEqual(.json, parseFormat("json").?);
+    try std.testing.expectEqual(.text, parseFormat("text").?);
+    try std.testing.expectEqual(.auto, parseFormat("auto").?);
+    try std.testing.expect(parseFormat("bogus") == null);
+    try std.testing.expect(parseFormat("") == null);
+    try std.testing.expect(parseFormat("JSON") == null);
 }
 
 test {

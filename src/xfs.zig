@@ -298,13 +298,48 @@ test "XFS stale handles are skipped" {
 }
 
 test "XFS parent records reject invalid lengths and names" {
+    // Gaps: length==0 terminator, length%8!=0, handle.length!=14, missing NUL, empty name, short buffer.
     var data: [40]u8 = @splat(0);
     const header: ParentHeader = .{ .handle = .{ .fsid = 1, .inode = 42, .generation = 1 }, .length = 40, .reserved = 0 };
     @memcpy(data[0..32], std.mem.asBytes(&header));
     @memcpy(data[32..36], "test");
     const parsed = try parseParent(&data);
     try std.testing.expectEqualStrings("test", parsed.parent.?.name);
+    try std.testing.expectEqual(@as(usize, 40), parsed.size);
     try std.testing.expectError(error.CorruptMetadata, parseParent(data[0..39]));
     data[33] = '/';
     try std.testing.expectError(error.CorruptMetadata, parseParent(&data));
+    // length==0 terminator yields null parent
+    var term: [32]u8 = @splat(0);
+    @memcpy(term[0..32], std.mem.asBytes(&header));
+    var term_header = header;
+    term_header.length = 0;
+    @memcpy(term[0..32], std.mem.asBytes(&term_header));
+    const term_parsed = try parseParent(&term);
+    try std.testing.expect(term_parsed.parent == null);
+    try std.testing.expectEqual(@as(usize, 32), term_parsed.size);
+    // length % 8 != 0
+    var bad_len: [40]u8 = @splat(0);
+    var bad_header = header;
+    bad_header.length = 39;
+    @memcpy(bad_len[0..32], std.mem.asBytes(&bad_header));
+    @memcpy(bad_len[32..36], "test");
+    try std.testing.expectError(error.CorruptMetadata, parseParent(&bad_len));
+    // handle.length != 14
+    var bad_handle: [40]u8 = @splat(0);
+    var bad_h = header;
+    bad_h.handle.length = 13;
+    bad_h.length = 40;
+    @memcpy(bad_handle[0..32], std.mem.asBytes(&bad_h));
+    @memcpy(bad_handle[32..36], "test");
+    try std.testing.expectError(error.CorruptMetadata, parseParent(&bad_handle));
+    // missing NUL terminator (non-zero tail)
+    var no_nul: [40]u8 = @splat('x');
+    @memcpy(no_nul[0..32], std.mem.asBytes(&header));
+    try std.testing.expectError(error.CorruptMetadata, parseParent(&no_nul));
+    // invalid name "." rejected by validName
+    var dot: [40]u8 = @splat(0);
+    @memcpy(dot[0..32], std.mem.asBytes(&header));
+    dot[32] = '.';
+    try std.testing.expectError(error.CorruptMetadata, parseParent(&dot));
 }

@@ -244,19 +244,53 @@ fn collectWithAllocationFailures(gpa: std.mem.Allocator) !void {
     _ = try collector.consider("/path-\xff");
 }
 
+test "JSON collector paging and truncation" {
+    // offset/limit/truncated/total are critical paging contract; exercise every Decision.
+    var collector: Collector = .{ .io = std.testing.io, .gpa = std.testing.allocator, .offset = 2, .limit = 2, .json = true, .pretty = false };
+    defer collector.deinit();
+    // seen: 0,1 skipped by offset; 2,3 emitted (kept==limit -> last handled next); 4 triggers done+truncated.
+    try std.testing.expectEqual(.skip, try collector.consider("/a"));
+    try std.testing.expectEqual(.skip, try collector.consider("/b"));
+    try std.testing.expectEqual(.emit, try collector.consider("/c"));
+    try std.testing.expectEqual(.emit, try collector.consider("/d"));
+    try std.testing.expectEqual(.done, try collector.consider("/e"));
+    try std.testing.expect(collector.truncated);
+    try std.testing.expectEqual(@as(usize, 5), collector.seen);
+    try std.testing.expectEqual(@as(usize, 2), collector.kept);
+    try collector.finish(false);
+    // JSON document must contain exactly emitted items and truncated flag, no total.
+    const out = collector.output.items;
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"truncated\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"total\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "/c") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "/d") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "/e") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "/a") == null);
+}
+
 test "JSON collector frees allocations when encoding fails" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, collectWithAllocationFailures, .{});
 }
 
 test "prepared case-insensitive patterns handle overlaps and raw bytes" {
+    // preparePattern only builds KMP table for pattern.len > 4; verify both branches agree.
     const long: [512]u8 = @splat('a');
     const long_hit = long ++ "B/\xffAbCd/MiXeD/AAABAAAB";
     for ([_][]const u8{ "aAaAaB", "aaaab", "AAABAAAB", "mixed", "\xffAbCd", "", "ab" }) |pattern| {
         var opts: Options = .{ .pattern = pattern, .ignore_case = true, .threads = 1 };
         try opts.preparePattern(std.testing.allocator);
         defer std.testing.allocator.free(opts.prefix);
+        // Short patterns (<=4) must skip allocation; long patterns must not.
+        try std.testing.expectEqual(pattern.len <= 4, opts.prefix.len == 0);
         for ([_][]const u8{ "", "a", "aaaaaaaaab", "aaabaaabaaab", "/MiXeD/path", "\xffaBcD", "other", &long, long_hit }) |path| {
             try std.testing.expectEqual(std.ascii.findIgnoreCase(path, pattern) != null, opts.matches(path));
         }
     }
+    // Options.matches must exercise KMP branch for long paths (>=256): verify long_hit hit/miss.
+    var kmp: Options = .{ .pattern = "AAABAAAB", .ignore_case = true, .threads = 1 };
+    try kmp.preparePattern(std.testing.allocator);
+    defer std.testing.allocator.free(kmp.prefix);
+    try std.testing.expect(kmp.matches(long_hit));
+    const long_miss = long ++ "B/\xffAbCd/MiXeD/AAABAAAA"; // truncated final char
+    try std.testing.expect(!kmp.matches(long_miss));
 }
