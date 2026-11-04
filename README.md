@@ -43,7 +43,7 @@ entries. The root itself is not included.
 - `--` ends option parsing, e.g. `fslocate -r . -- '-report'`.
 - `-h` / `--help` and `-V` / `--version` show help and version.
 - `schema` prints the clispec 0.3 document as one JSON document and exits 0. `schema search` returns that document filtered to the search command. It needs no root and no pattern.
-- `-o` / `--output` selects `auto` (default), `text`, or `json`. Text is one path per line on a terminal and when piped. `json` prints one document, `{"items":[{"path":"..."}],"total":N}`. A page that stops early sets `"truncated":true` and omits `total`.
+- `-o` / `--output` selects `auto` (default), `text`, or `json`. Text is one path per line on a terminal and when piped. `json` prints one document, `{"items":[{"path":"..."}],"total":N}`, where `total` counts all matches before paging. A page that stops early sets `"truncated":true` and omits `total`.
 - JSON is emitted in buffered batches during the search. A directory error
   preserves the available items, adds `"incomplete":true`, omits `total`, and
   exits 2. Output failures can leave a partial document; always check the exit

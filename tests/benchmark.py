@@ -1,4 +1,4 @@
-"""Compare checked search workloads; fixture setup is never timed."""
+"""Compare checked-in search workloads; fixture setup is never timed."""
 
 import argparse
 import base64

@@ -2,7 +2,7 @@
 
 Run as an ordinary user with passwordless sudo. Only fresh temporary images
 are formatted. Network tests require a disposable guest with NFS/smbd installed;
-their servers and exports are bound to loopback. See README.md for prerequisites.
+their servers and exports are bound to loopback. See README.md, Filesystem verification, for prerequisites.
 """
 
 import argparse
