@@ -13,7 +13,9 @@ pub fn Backend(comptime filesystem_name: []const u8, comptime magic: usize) type
     return struct {
         pub const name = filesystem_name;
         pub const native = false;
-        pub const search = walk.search;
+        pub fn search(io: std.Io, gpa: std.mem.Allocator, opts: common.Options, root: []const u8, dir: std.Io.Dir, collector: *common.Collector) !u8 {
+            return walk.run(Reader, io, gpa, opts, root, dir, collector);
+        }
 
         pub fn supports(value: usize) bool {
             return value == magic;
