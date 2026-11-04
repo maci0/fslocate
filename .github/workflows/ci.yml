@@ -1,0 +1,20 @@
+---
+name: CI
+"on": [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ruff
+        run: |
+          pip install ruff
+          ruff check tests/
+          ruff format --check tests/
+      - name: clang-format
+        run: clang-format --dry-run --Werror tests/zfs_native_api.c
+      - name: zig fmt
+        run: zig fmt --check build.zig src

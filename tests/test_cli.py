@@ -1,16 +1,19 @@
-import os
 import fcntl
-from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
 import time
 import unittest
-
+from pathlib import Path
 
 BINARY = Path(__file__).resolve().parents[1] / "zig-out/bin/fslocate"
 STREAMING_ENTRIES = 600  # Long names still exceed the 64 KiB output buffer.
-TEST_TMPDIR = "/dev/shm" if not os.environ.get("TMPDIR") and os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK | os.X_OK) else None
+TEST_TMPDIR = (
+    "/dev/shm"
+    if not os.environ.get("TMPDIR") and os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK | os.X_OK)
+    else None
+)
 
 
 def wait_for_pipe_write(process):
@@ -37,7 +40,8 @@ class SearchTests(unittest.TestCase):
     def run_search(self, pattern, *options):
         return subprocess.run(
             [BINARY, *options, "--root", self.root, "--", pattern],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
 
     def paths(self, pattern, *options):
@@ -95,8 +99,7 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.paths("deep-leaf"), {os.fsencode(leaf)})
         alias = self.root / "root-alias"
         alias.symlink_to(self.root, target_is_directory=True)
-        result = subprocess.run([BINARY, "deep-leaf", alias],
-                                capture_output=True, timeout=10)
+        result = subprocess.run([BINARY, "deep-leaf", alias], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, os.fsencode(leaf) + b"\n")
 
@@ -124,8 +127,10 @@ class SearchTests(unittest.TestCase):
         self.assertGreater(len(expected), 4096)
         self.assertEqual(self.paths("deep-leaf", "-b", "walk", "-j", "1"), {expected})
 
-    @unittest.skipUnless(Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
-                         "requires Linux pipe and process inspection")
+    @unittest.skipUnless(
+        Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
+        "requires Linux pipe and process inspection",
+    )
     def test_intermediate_directory_replaced_by_symlink_is_not_followed(self):
         root = self.root / "race"
         victim = root / "victim"
@@ -136,8 +141,11 @@ class SearchTests(unittest.TestCase):
         read_fd, write_fd = os.pipe()
         os.write(write_fd, b"x" * fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ))
         with os.fdopen(read_fd, "rb") as output:
-            with subprocess.Popen([BINARY, "-b", "walk", "-j", "1", "-r", root, "/victim/child"],
-                                  stdout=write_fd, stderr=subprocess.PIPE) as process:
+            with subprocess.Popen(
+                [BINARY, "-b", "walk", "-j", "1", "-r", root, "/victim/child"],
+                stdout=write_fd,
+                stderr=subprocess.PIPE,
+            ) as process:
                 os.close(write_fd)
                 wait_for_pipe_write(process)
                 # Only child matches, so victim/child is queued before this write blocks.
@@ -157,14 +165,20 @@ class SearchTests(unittest.TestCase):
         def limit_memory():
             resource.setrlimit(resource.RLIMIT_AS, (64 * 1024 * 1024,) * 2)
 
-        result = subprocess.run([BINARY, "-b", "walk", "-j", "256", "README", self.root],
-                                capture_output=True, timeout=10, preexec_fn=limit_memory)
+        result = subprocess.run(
+            [BINARY, "-b", "walk", "-j", "256", "README", self.root],
+            capture_output=True,
+            timeout=10,
+            preexec_fn=limit_memory,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, b"")
         self.assertEqual(result.stdout, os.fsencode(self.root / "nested/README.md") + b"\n")
 
-    @unittest.skipUnless(Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
-                         "requires Linux pipe and process inspection")
+    @unittest.skipUnless(
+        Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
+        "requires Linux pipe and process inspection",
+    )
     def test_queued_directory_replaced_by_symlink_is_not_followed(self):
         root = self.root / "race"
         root.mkdir()
@@ -177,8 +191,11 @@ class SearchTests(unittest.TestCase):
         capacity = fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
         os.write(write_fd, b"x" * capacity)
         with os.fdopen(read_fd, "rb") as output:
-            with subprocess.Popen([BINARY, "-b", "walk", "-j", "1", "-r", root, ""],
-                                  stdout=write_fd, stderr=subprocess.PIPE) as process:
+            with subprocess.Popen(
+                [BINARY, "-b", "walk", "-j", "1", "-r", root, ""],
+                stdout=write_fd,
+                stderr=subprocess.PIPE,
+            ) as process:
                 os.close(write_fd)
                 wait_for_pipe_write(process)
                 # Backpressure pauses the scan after queuing victim, before opening it.
@@ -216,8 +233,18 @@ class SearchTests(unittest.TestCase):
         for threads in (1, 8):
             for offset, limit in ((0, 0), (0, 1), (3, 5), (39, 5), (50, 5), (0, 40)):
                 with self.subTest(threads=threads, offset=offset, limit=limit):
-                    result = self.run_search("page-item-", "-b", "walk", "-0", "-j", str(threads),
-                                             "--offset", str(offset), "--limit", str(limit))
+                    result = self.run_search(
+                        "page-item-",
+                        "-b",
+                        "walk",
+                        "-0",
+                        "-j",
+                        str(threads),
+                        "--offset",
+                        str(offset),
+                        "--limit",
+                        str(limit),
+                    )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stderr, b"")
                     paths = result.stdout.split(b"\0")[:-1] if result.stdout else []
@@ -228,8 +255,7 @@ class SearchTests(unittest.TestCase):
     def test_default_root_and_option_terminator(self):
         path = self.root / "-needle"
         path.touch()
-        result = subprocess.run([BINARY, "--", "-needle"], cwd=self.root,
-                                capture_output=True, timeout=10)
+        result = subprocess.run([BINARY, "--", "-needle"], cwd=self.root, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, os.fsencode(path) + b"\n")
 
@@ -250,38 +276,51 @@ class SearchTests(unittest.TestCase):
 
     def test_root_options_and_positional_compatibility(self):
         expected = os.fsencode(self.root / "nested/README.md") + b"\n"
-        for args in (["-r", self.root, "README"],
-                     ["README", "--root", self.root],
-                     ["--root", ".", "README"],
-                     ["README", self.root]):
-            result = subprocess.run([BINARY, *args], cwd=self.root,
-                                    capture_output=True, timeout=10)
+        for args in (
+            ["-r", self.root, "README"],
+            ["README", "--root", self.root],
+            ["--root", ".", "README"],
+            ["README", self.root],
+        ):
+            result = subprocess.run([BINARY, *args], cwd=self.root, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, expected)
 
         path = self.root / "-needle"
         path.touch()
-        result = subprocess.run([BINARY, "-r", self.root, "--", "-needle"],
-                                capture_output=True, timeout=10)
+        result = subprocess.run([BINARY, "-r", self.root, "--", "-needle"], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, os.fsencode(path) + b"\n")
 
     def test_invalid_arguments_and_roots(self):
-        for args in ([], ["--unknown"], ["-r"], ["--root"], ["--root", self.root],
-                     ["--root", self.root, "x", self.root],
-                     ["x", self.root, "--root", self.root],
-                     ["x", "--root", self.root / "missing"],
-                     ["x", "-r", self.root / "nested/README.md"],
-                     ["-j"], ["-j", "0", "x"],
-                     ["-j", "257", "x"], ["-j", "abc", "x"],
-                     ["x", self.root / "missing"],
-                     ["x", self.root / "nested/README.md"], ["x", ".", "."]):
+        for args in (
+            [],
+            ["--unknown"],
+            ["-r"],
+            ["--root"],
+            ["--root", self.root],
+            ["--root", self.root, "x", self.root],
+            ["x", self.root, "--root", self.root],
+            ["x", "--root", self.root / "missing"],
+            ["x", "-r", self.root / "nested/README.md"],
+            ["-j"],
+            ["-j", "0", "x"],
+            ["-j", "257", "x"],
+            ["-j", "abc", "x"],
+            ["x", self.root / "missing"],
+            ["x", self.root / "nested/README.md"],
+            ["x", ".", "."],
+        ):
             result = subprocess.run([BINARY, *args], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 2, (args, result.stderr))
             self.assertTrue(result.stderr)
 
     def test_help_and_version(self):
-        for option, expected in (("--help", b"Usage:"), ("--version", b"0.3.0"), ("--help", b"schema")):
+        for option, expected in (
+            ("--help", b"Usage:"),
+            ("--version", b"0.3.0"),
+            ("--help", b"schema"),
+        ):
             result = subprocess.run([BINARY, option], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0)
             self.assertIn(expected, result.stdout)
@@ -297,20 +336,32 @@ class SearchTests(unittest.TestCase):
     @unittest.skipUnless(Path("/dev/full").exists(), "requires /dev/full")
     def test_output_errors_are_reported(self):
         with open("/dev/full", "wb") as output:
-            result = subprocess.run([BINARY, "README", self.root],
-                                    stdout=output, stderr=subprocess.PIPE, timeout=10)
+            result = subprocess.run(
+                [BINARY, "README", self.root],
+                stdout=output,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
         self.assertEqual(result.returncode, 2)
         self.assertIn(b"stdout", result.stderr)
 
     def test_json_output_error_is_reported_once(self):
         import json
+
         for i in range(STREAMING_ENTRIES):
             (self.root / (f"entry-{i}-" + "x" * 100)).touch()
         for pattern in ("README", ""):
             for threads in (1, 8):
-                with self.subTest(pattern=pattern, threads=threads), open("/dev/full", "wb") as output:
-                    result = subprocess.run([BINARY, "-o", "json", "-j", str(threads), pattern, self.root],
-                                            stdout=output, stderr=subprocess.PIPE, timeout=10)
+                with (
+                    self.subTest(pattern=pattern, threads=threads),
+                    open("/dev/full", "wb") as output,
+                ):
+                    result = subprocess.run(
+                        [BINARY, "-o", "json", "-j", str(threads), pattern, self.root],
+                        stdout=output,
+                        stderr=subprocess.PIPE,
+                        timeout=10,
+                    )
                     self.assertEqual(result.returncode, 2)
                     self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
                     error = json.loads(result.stderr)["error"]
@@ -349,8 +400,11 @@ class SearchTests(unittest.TestCase):
             (self.root / (f"f{i}-" + "x" * 100)).touch()
         for options in ([], ["-o", "json"], ["-o", "json", "--limit", "1"]):
             with self.subTest(options=options):
-                with subprocess.Popen([BINARY, *options, "", self.root], stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE) as process:
+                with subprocess.Popen(
+                    [BINARY, *options, "", self.root],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ) as process:
                     process.stdout.close()
                     self.assertEqual(process.wait(timeout=10), 0)
                     self.assertEqual(process.stderr.read(), b"")
@@ -366,13 +420,16 @@ class ClispecTests(unittest.TestCase):
 
     def test_usage_errors_follow_the_effective_output_option(self):
         import json
-        for args, structured in ((["-r", "--", "-o", "json"], True),
-                                 (["-r", "-o", "json", "--unknown"], False),
-                                 (["-r", "--output=json", "--unknown"], False),
-                                 (["-o", "json", "-o", "text", "--unknown"], False),
-                                 (["-o", "text", "-o", "json", "--unknown"], True),
-                                 (["--limit", "bad", "-o", "json", "x"], True),
-                                 (["--", "-o", "json", "extra"], False)):
+
+        for args, structured in (
+            (["-r", "--", "-o", "json"], True),
+            (["-r", "-o", "json", "--unknown"], False),
+            (["-r", "--output=json", "--unknown"], False),
+            (["-o", "json", "-o", "text", "--unknown"], False),
+            (["-o", "text", "-o", "json", "--unknown"], True),
+            (["--limit", "bad", "-o", "json", "x"], True),
+            (["--", "-o", "json", "extra"], False),
+        ):
             with self.subTest(args=args):
                 result = subprocess.run([BINARY, *args], capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 2)
@@ -385,12 +442,16 @@ class ClispecTests(unittest.TestCase):
     @unittest.skipIf(os.geteuid() == 0, "root bypasses directory permissions")
     def test_json_directory_errors_are_json_lines_with_context(self):
         import json
+
         blocked = self.root / 'blocked-"\nname'
         blocked.mkdir()
         blocked.chmod(0)
         try:
-            result = subprocess.run([BINARY, "-o", "json", "-b", "walk", "-r", self.root, "README"],
-                                    capture_output=True, timeout=10)
+            result = subprocess.run(
+                [BINARY, "-o", "json", "-b", "walk", "-r", self.root, "README"],
+                capture_output=True,
+                timeout=10,
+            )
             self.assertEqual(result.returncode, 2)
             errors = [json.loads(line)["error"] for line in result.stderr.splitlines()]
             self.assertEqual(len(errors), 1)
@@ -407,29 +468,47 @@ class ClispecTests(unittest.TestCase):
     @unittest.skipUnless(Path("/dev/shm").is_dir(), "requires tmpfs mount")
     def test_unsupported_native_json_errors_have_no_text_prefix(self):
         import json
-        result = subprocess.run([BINARY, "-o", "json", "-b", "native", "-r", "/dev/shm", ""],
-                                capture_output=True, timeout=10)
+
+        result = subprocess.run(
+            [BINARY, "-o", "json", "-b", "native", "-r", "/dev/shm", ""],
+            capture_output=True,
+            timeout=10,
+        )
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr)["error"]["kind"], "failure")
 
     def test_json_preserves_distinct_raw_path_identities(self):
         import base64
         import json
-        expected = {os.fsencode(self.root) + b"/raw-\xff", os.fsencode(self.root) + b"/raw-\xc3\xbf"}
+
+        expected = {
+            os.fsencode(self.root) + b"/raw-\xff",
+            os.fsencode(self.root) + b"/raw-\xc3\xbf",
+        }
         for path in expected:
             fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
             os.close(fd)
         for fields in ("path", "path,path_bytes_base64", "path_bytes_base64"):
             with self.subTest(fields=fields):
-                result = subprocess.run([BINARY, "-o", "json", "--fields", fields, "-r", self.root, "raw-"],
-                                        capture_output=True, timeout=10)
+                result = subprocess.run(
+                    [BINARY, "-o", "json", "--fields", fields, "-r", self.root, "raw-"],
+                    capture_output=True,
+                    timeout=10,
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 items = json.loads(result.stdout)["items"]
-                identities = {base64.b64decode(item["path_bytes_base64"], validate=True)
-                              if "path_bytes_base64" in item else item["path"].encode("utf-8") for item in items}
+                identities = {
+                    base64.b64decode(item["path_bytes_base64"], validate=True)
+                    if "path_bytes_base64" in item
+                    else item["path"].encode("utf-8")
+                    for item in items
+                }
                 self.assertEqual(len(items), 2)
                 self.assertEqual(identities, expected)
-                self.assertEqual(sum("path_bytes_base64" in item for item in items), 1 if fields == "path" else 2)
+                self.assertEqual(
+                    sum("path_bytes_base64" in item for item in items),
+                    1 if fields == "path" else 2,
+                )
                 if fields == "path_bytes_base64":
                     self.assertTrue(all(set(item) == {"path_bytes_base64"} for item in items))
 
@@ -437,39 +516,64 @@ class ClispecTests(unittest.TestCase):
         for pattern in ("search", "schema"):
             path = self.root / (pattern + "-file")
             path.touch()
-            for args in (["search", pattern, self.root], ["search", "-r", self.root, pattern],
-                         ["-r", self.root, "--", pattern]):
+            for args in (
+                ["search", pattern, self.root],
+                ["search", "-r", self.root, pattern],
+                ["-r", self.root, "--", pattern],
+            ):
                 with self.subTest(args=args):
                     result = subprocess.run([BINARY, *args], capture_output=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, os.fsencode(path) + b"\n")
 
     def test_inline_option_values_match_separate_values(self):
-        options = [("--root", str(self.root)), ("--backend", "walk"), ("--threads", "1"),
-                   ("--offset", "0"), ("--limit", "1"), ("--output", "json"), ("--fields", "path")]
+        options = [
+            ("--root", str(self.root)),
+            ("--backend", "walk"),
+            ("--threads", "1"),
+            ("--offset", "0"),
+            ("--limit", "1"),
+            ("--output", "json"),
+            ("--fields", "path"),
+        ]
         separate = [part for pair in options for part in pair]
         inline = [f"{name}={value}" for name, value in options]
         baseline = subprocess.run([BINARY, *separate, "README"], capture_output=True, timeout=10)
         result = subprocess.run([BINARY, *inline, "README"], capture_output=True, timeout=10)
         self.assertEqual(baseline.returncode, 0, baseline.stderr)
-        self.assertEqual((result.returncode, result.stdout, result.stderr),
-                         (baseline.returncode, baseline.stdout, baseline.stderr))
-        for option in ("--limit=bad", "--threads=0", "--ignore-case=true", "--help=true", "--root"):
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (baseline.returncode, baseline.stdout, baseline.stderr),
+        )
+        for option in (
+            "--limit=bad",
+            "--threads=0",
+            "--ignore-case=true",
+            "--help=true",
+            "--root",
+        ):
             result = subprocess.run([BINARY, "-o", "json", option], capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 2, (option, result.stderr))
 
     def test_schema_rejects_search_only_options(self):
-        for args in (["schema", "--root", self.root], ["-i", "schema"],
-                     ["schema", "--fields=path"], ["schema", "--limit=1"]):
+        for args in (
+            ["schema", "--root", self.root],
+            ["-i", "schema"],
+            ["schema", "--fields=path"],
+            ["schema", "--limit=1"],
+        ):
             with self.subTest(args=args):
                 result = subprocess.run([BINARY, *args], capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, b"")
 
-    @unittest.skipUnless(Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
-                         "requires Linux pipe and process inspection")
+    @unittest.skipUnless(
+        Path("/proc/self/wchan").exists() and hasattr(fcntl, "F_GETPIPE_SZ"),
+        "requires Linux pipe and process inspection",
+    )
     def test_json_streams_before_finishing_the_tree(self):
         import json
+
         child = self.root / "child"
         child.mkdir()
         for i in range(STREAMING_ENTRIES):
@@ -478,8 +582,22 @@ class ClispecTests(unittest.TestCase):
         capacity = fcntl.fcntl(write_fd, fcntl.F_GETPIPE_SZ)
         os.write(write_fd, b"x" * capacity)
         with os.fdopen(read_fd, "rb") as output:
-            with subprocess.Popen([BINARY, "-b", "walk", "-j", "1", "-o", "json", "-r", self.root, "bulk-"],
-                                  stdout=write_fd, stderr=subprocess.PIPE) as process:
+            with subprocess.Popen(
+                [
+                    BINARY,
+                    "-b",
+                    "walk",
+                    "-j",
+                    "1",
+                    "-o",
+                    "json",
+                    "-r",
+                    self.root,
+                    "bulk-",
+                ],
+                stdout=write_fd,
+                stderr=subprocess.PIPE,
+            ) as process:
                 os.close(write_fd)
                 wait_for_pipe_write(process)
                 late = child / "bulk-added-after-first-output"
@@ -492,6 +610,7 @@ class ClispecTests(unittest.TestCase):
 
     def test_schema_is_offline_json(self):
         import json
+
         result = subprocess.run([BINARY, "schema"], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, b"")
@@ -517,13 +636,28 @@ class ClispecTests(unittest.TestCase):
         narrowed = json.loads(filtered.stdout)
         self.assertEqual([command["name"] for command in narrowed["commands"]], ["search"])
         again = subprocess.run([BINARY, "schema", "schema"], capture_output=True, timeout=10)
-        self.assertEqual([command["name"] for command in json.loads(again.stdout)["commands"]], ["schema"])
+        self.assertEqual(
+            [command["name"] for command in json.loads(again.stdout)["commands"]],
+            ["schema"],
+        )
 
     def test_json_items_text_mode_and_usage_envelope(self):
         import json
+
         listed = subprocess.run(
-            [BINARY, "-o", "json", "--limit", "1", "--fields", "path", "nested", self.root],
-            capture_output=True, timeout=10,
+            [
+                BINARY,
+                "-o",
+                "json",
+                "--limit",
+                "1",
+                "--fields",
+                "path",
+                "nested",
+                self.root,
+            ],
+            capture_output=True,
+            timeout=10,
         )
         self.assertEqual(listed.returncode, 0, listed.stderr)
         doc = json.loads(listed.stdout)
@@ -535,7 +669,8 @@ class ClispecTests(unittest.TestCase):
 
         text = subprocess.run(
             [BINARY, "-o", "text", "README.md", self.root],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         self.assertEqual(text.returncode, 0, text.stderr)
         self.assertTrue(text.stdout.endswith(b"\n"))
@@ -544,7 +679,8 @@ class ClispecTests(unittest.TestCase):
 
         piped = subprocess.run(
             [BINARY, "README.md", self.root],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         self.assertEqual(piped.returncode, 0)
         self.assertIn(b"README.md", piped.stdout)
@@ -552,7 +688,8 @@ class ClispecTests(unittest.TestCase):
 
         missing = subprocess.run(
             [BINARY, "-o", "json", "no-such-name", self.root],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         self.assertEqual(missing.returncode, 1)
         empty = json.loads(missing.stdout)
@@ -571,7 +708,9 @@ class ClispecTests(unittest.TestCase):
         os.close(fd)
         encoded = subprocess.run(
             [BINARY, "-o", "json", "--", b"\xff"],
-            cwd=self.root, capture_output=True, timeout=10,
+            cwd=self.root,
+            capture_output=True,
+            timeout=10,
         )
         self.assertEqual(encoded.returncode, 0, encoded.stderr)
         payload = json.loads(encoded.stdout)

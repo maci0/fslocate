@@ -1,0 +1,15 @@
+[project]
+name = "fslocate"
+version = "0.3.0"
+description = "Find paths using live filesystem metadata"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 124
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.format]

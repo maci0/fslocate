@@ -2,17 +2,16 @@
 
 import argparse
 import base64
-from contextlib import nullcontext
 import json
 import os
-from pathlib import Path
 import resource
 import shutil
 import statistics
 import subprocess
 import tempfile
 import time
-
+from contextlib import nullcontext
+from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 CASES = ("selective", "all", "json", "ignore-case", "missing", "deep")
@@ -92,7 +91,12 @@ def prepare_fixture(folder, directories, files, layouts):
         create_fixture(folder / "search-root", directories, files)
     if "deep" in layouts:
         create_deep_fixture(folder / "deep-root")
-    metadata = {"version": 1, "directories": directories, "files_per_dir": files, "layouts": sorted(layouts)}
+    metadata = {
+        "version": 1,
+        "directories": directories,
+        "files_per_dir": files,
+        "layouts": sorted(layouts),
+    }
     (folder / "fixture.json").write_text(json.dumps(metadata, sort_keys=True) + "\n")
     return metadata
 
@@ -118,38 +122,102 @@ def commands(binary, compare, root, query, case, native):
         if executable is None:
             continue
         for threads in (1, 8):
-            tools[f"{label} walk j{threads}"] = [executable, "-b", "walk", "-j", str(threads),
-                                                "-0", "-o", output, *flags, "-r", root, "--", query]
+            tools[f"{label} walk j{threads}"] = [
+                executable,
+                "-b",
+                "walk",
+                "-j",
+                str(threads),
+                "-0",
+                "-o",
+                output,
+                *flags,
+                "-r",
+                root,
+                "--",
+                query,
+            ]
     if native:
-        tools["current native j8 (sudo)"] = ["sudo", "-n", binary, "-b", "native", "-j", "8",
-                                             "-0", "-o", output, *flags, "-r", root, "--", query]
+        tools["current native j8 (sudo)"] = [
+            "sudo",
+            "-n",
+            binary,
+            "-b",
+            "native",
+            "-j",
+            "8",
+            "-0",
+            "-o",
+            output,
+            *flags,
+            "-r",
+            root,
+            "--",
+            query,
+        ]
     if case != "json":
         if shutil.which("find"):
-            tools["find"] = ["find", root, "-mindepth", "1", "-ipath" if flags else "-path", "*" + query + "*", "-print0"]
+            tools["find"] = [
+                "find",
+                root,
+                "-mindepth",
+                "1",
+                "-ipath" if flags else "-path",
+                "*" + query + "*",
+                "-print0",
+            ]
         if shutil.which("fd"):
-            tools["fd j8"] = ["fd", "-F", "-p", "-H", "-I", "--color", "never", "-j", "8", "-0",
-                               "-i" if flags else "-s", "--", query, root]
+            tools["fd j8"] = [
+                "fd",
+                "-F",
+                "-p",
+                "-H",
+                "-I",
+                "--color",
+                "never",
+                "-j",
+                "8",
+                "-0",
+                "-i" if flags else "-s",
+                "--",
+                query,
+                root,
+            ]
     return tools
 
 
 def run(command, capture):
-    return subprocess.run(command, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                          stderr=subprocess.PIPE, timeout=60)
+    return subprocess.run(
+        command,
+        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=60,
+    )
 
 
 def verify(name, command, expected, case):
     result = run(command, True)
-    assert result.returncode in (0, 1) and not result.stderr, (name, result.returncode, result.stderr)
+    assert result.returncode in (0, 1) and not result.stderr, (
+        name,
+        result.returncode,
+        result.stderr,
+    )
     if case == "json":
         document = json.loads(result.stdout)
-        entries = [base64.b64decode(item["path_bytes_base64"], validate=True)
-                   if "path_bytes_base64" in item else item["path"].encode("utf-8")
-                   for item in document["items"]]
+        entries = [
+            base64.b64decode(item["path_bytes_base64"], validate=True)
+            if "path_bytes_base64" in item
+            else item["path"].encode("utf-8")
+            for item in document["items"]
+        ]
         assert document["total"] == len(expected), (name, document)
     else:
         assert not result.stdout or result.stdout.endswith(b"\0"), name
         entries = [path.removesuffix(b"/") for path in result.stdout.split(b"\0")[:-1]]
-    assert set(entries) == expected and len(entries) == len(expected), (name, "incorrect paths")
+    assert set(entries) == expected and len(entries) == len(expected), (
+        name,
+        "incorrect paths",
+    )
     return result.returncode
 
 
@@ -169,21 +237,33 @@ def benchmark(tools, expected, case, runs):
             wall = (time.perf_counter_ns() - start) / 1_000_000
             after = resource.getrusage(resource.RUSAGE_CHILDREN)
             cpu = ((after.ru_utime - usage.ru_utime) + (after.ru_stime - usage.ru_stime)) * 1000
-            assert result.returncode == statuses[name] and not result.stderr, (name, result.returncode, result.stderr)
+            assert result.returncode == statuses[name] and not result.stderr, (
+                name,
+                result.returncode,
+                result.stderr,
+            )
             samples[name].append((wall, cpu))
-    print(f"\n{case}: {len(expected):,} matches; warm cache; {runs} interleaved runs", flush=True)
+    print(
+        f"\n{case}: {len(expected):,} matches; warm cache; {runs} interleaved runs",
+        flush=True,
+    )
     print(f"{'tool':30s} {'wall ms':>10s} {'CPU ms':>10s} {'wall range ms':>19s}")
     for name, measurements in samples.items():
         wall, cpu = zip(*measurements)
-        print(f"{name:30s} {statistics.median(wall):10.2f} {statistics.median(cpu):10.2f} "
-              f"{min(wall):8.2f}–{max(wall):8.2f}", flush=True)
+        print(
+            f"{name:30s} {statistics.median(wall):10.2f} {statistics.median(cpu):10.2f} {min(wall):8.2f}–{max(wall):8.2f}",
+            flush=True,
+        )
     for threads in (1, 8):
         before = samples.get(f"before walk j{threads}")
         if before:
             current = samples[f"current walk j{threads}"]
             wall = statistics.median(old[0] / new[0] for old, new in zip(before, current))
             cpu = [old[1] / new[1] for old, new in zip(before, current) if new[1] > 0]
-            print(f"before/current j{threads}: {wall:.2f}x wall; {statistics.median(cpu):.2f}x CPU", flush=True)
+            print(
+                f"before/current j{threads}: {wall:.2f}x wall; {statistics.median(cpu):.2f}x CPU",
+                flush=True,
+            )
 
 
 def main():
@@ -196,10 +276,24 @@ def main():
     parser.add_argument("--directories", type=positive, help="default: 1000, or saved fixture value")
     parser.add_argument("--files-per-dir", type=positive, help="default: 100, or saved fixture value")
     fixtures = parser.add_mutually_exclusive_group()
-    fixtures.add_argument("--fixture-parent", type=Path, default=PROJECT,
-                          help="filesystem for temporary data; /dev/shm avoids disk I/O")
-    fixtures.add_argument("--prepare", type=Path, metavar="DIR", help="create a reusable fixture and exit; DIR must not exist")
-    fixtures.add_argument("--fixture", type=Path, metavar="DIR", help="reuse a prepared fixture without modifying it")
+    fixtures.add_argument(
+        "--fixture-parent",
+        type=Path,
+        default=PROJECT,
+        help="filesystem for temporary data; /dev/shm avoids disk I/O",
+    )
+    fixtures.add_argument(
+        "--prepare",
+        type=Path,
+        metavar="DIR",
+        help="create a reusable fixture and exit; DIR must not exist",
+    )
+    fixtures.add_argument(
+        "--fixture",
+        type=Path,
+        metavar="DIR",
+        help="reuse a prepared fixture without modifying it",
+    )
     parser.add_argument("--cpus", help="Linux CPU affinity, e.g. 2,3,4,5,6,7,8,9")
     options = parser.parse_args()
     layouts = {"deep" if case == "deep" else "shallow" for case in options.case}
@@ -210,7 +304,12 @@ def main():
         except OSError as error:
             parser.error(f"cannot create fixture: {error}")
         try:
-            prepare_fixture(folder, options.directories or 1000, options.files_per_dir or 100, layouts)
+            prepare_fixture(
+                folder,
+                options.directories or 1000,
+                options.files_per_dir or 100,
+                layouts,
+            )
         except BaseException:
             shutil.rmtree(folder)
             raise
@@ -249,7 +348,10 @@ def main():
             parser.error(f"not an executable file: {executable}")
     if workspace is None:
         workspace = tempfile.TemporaryDirectory(prefix=".fslocate-bench-", dir=options.fixture_parent)
-    print("Setup and correctness checks excluded. CPU sums search-process threads; wall includes waiting.", flush=True)
+    print(
+        "Setup and correctness checks excluded. CPU sums search-process threads; wall includes waiting.",
+        flush=True,
+    )
     with workspace as folder:
         folder = Path(folder)
         if not options.fixture:
@@ -280,7 +382,12 @@ def main():
                 expected = {path for path in manifest if os.fsencode(query) in path}
                 if case == "ignore-case":
                     query = query.upper()
-            benchmark(commands(binary, compare, case_root, query, case, options.native), expected, case, options.runs)
+            benchmark(
+                commands(binary, compare, case_root, query, case, options.native),
+                expected,
+                case,
+                options.runs,
+            )
 
 
 if __name__ == "__main__":

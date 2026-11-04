@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{ .name = "fslocate", .root_module = module });
     b.installArtifact(exe);
 
+    const check = b.step("check", "Run static analysis (blocking)");
+    check.dependOn(&exe.step);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run fslocate").dependOn(&run.step);

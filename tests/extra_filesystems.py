@@ -7,17 +7,16 @@ their servers and exports are bound to loopback. See README.md for prerequisites
 
 import argparse
 import base64
-from contextlib import ExitStack
 import errno
 import json
 import os
-from pathlib import Path
 import pwd
 import socket
 import subprocess
 import tempfile
 import time
-
+from contextlib import ExitStack
+from pathlib import Path
 
 BINARY = Path(__file__).resolve().parents[1] / "zig-out/bin/fslocate"
 FILESYSTEMS = {
@@ -39,8 +38,11 @@ FILESYSTEMS = {
 def command(args):
     result = subprocess.run(args, capture_output=True, timeout=90)
     if result.returncode:
-        raise RuntimeError(f"{args!r}: exit {result.returncode}; "
-                           + result.stderr.decode(errors="replace") + result.stdout.decode(errors="replace"))
+        raise RuntimeError(
+            f"{args!r}: exit {result.returncode}; "
+            + result.stderr.decode(errors="replace")
+            + result.stdout.decode(errors="replace")
+        )
     return result
 
 
@@ -129,7 +131,12 @@ def check(result, expected):
     entries = result.stdout.split(b"\0")[:-1] if result.stdout else []
     assert len(entries) == len(set(entries)), "duplicate paths"
     actual = set(entries)
-    assert actual == expected, ("missing", expected - actual, "extra", actual - expected)
+    assert actual == expected, (
+        "missing",
+        expected - actual,
+        "extra",
+        actual - expected,
+    )
 
 
 def verify(kind, root, manifest, writable, posix):
@@ -138,20 +145,38 @@ def verify(kind, root, manifest, writable, posix):
     assert actual_magic == magic, (kind, "wrong filesystem/driver", actual_magic)
     prefix = os.fsencode(root) + b"/"
     expected = {prefix + relative for relative in manifest}
-    for backend, privileged, threads in (("walk", False, 1), ("auto", False, 8),
-                                          ("walk", True, 8), ("auto", True, 1)):
-        for pattern in (b"", b"README", b"nested", b"[literal]", b"leaf", b"no-such-filename"):
-            check(search(root, pattern, backend, privileged, threads),
-                  {path for path in expected if pattern in path})
-        check(search(root, b"readme", backend, privileged, threads, True),
-              {path for path in expected if b"readme" in path.lower()})
+    for backend, privileged, threads in (
+        ("walk", False, 1),
+        ("auto", False, 8),
+        ("walk", True, 8),
+        ("auto", True, 1),
+    ):
+        for pattern in (
+            b"",
+            b"README",
+            b"nested",
+            b"[literal]",
+            b"leaf",
+            b"no-such-filename",
+        ):
+            check(
+                search(root, pattern, backend, privileged, threads),
+                {path for path in expected if pattern in path},
+            )
+        check(
+            search(root, b"readme", backend, privileged, threads, True),
+            {path for path in expected if b"readme" in path.lower()},
+        )
     for privileged in (False, True):
         args = [BINARY, "-o", "json", "-r", root, ""]
         result = command(["sudo", "-n", *args] if privileged else args)
         document = json.loads(result.stdout)
-        identities = [base64.b64decode(item["path_bytes_base64"], validate=True)
-                      if "path_bytes_base64" in item else item["path"].encode("utf-8")
-                      for item in document["items"]]
+        identities = [
+            base64.b64decode(item["path_bytes_base64"], validate=True)
+            if "path_bytes_base64" in item
+            else item["path"].encode("utf-8")
+            for item in document["items"]
+        ]
         assert len(identities) == len(set(identities)) and set(identities) == expected, kind
         assert document["total"] == len(expected), document
     unsupported = search(root, backend="native", privileged=True)
@@ -181,17 +206,26 @@ def verify(kind, root, manifest, writable, posix):
             result = search(root, b"secret")
             assert result.returncode == 2 and b"locked" in result.stderr, result.stderr
             assert not result.stdout
-            check(search(root, b"secret", privileged=True), {os.fsencode(locked / "secret")})
+            check(
+                search(root, b"secret", privileged=True),
+                {os.fsencode(locked / "secret")},
+            )
         finally:
             locked.chmod(0o700)
-    print(f"{kind}: {len(expected)} paths; user/root, 1/8 workers, hardlinks where supported, "
-          "namespace, live/read-only behavior OK", flush=True)
+    print(
+        f"{kind}: {len(expected)} paths; user/root, 1/8 workers, hardlinks where supported, "
+        "namespace, live/read-only behavior OK",
+        flush=True,
+    )
 
 
 def run(kind):
     posix = kind not in {"fat", "exfat", "ntfs3", "smb"}
     writable = kind not in {"squashfs", "erofs"}
-    with tempfile.TemporaryDirectory(prefix=f"fslocate-{kind}-") as temporary, ExitStack() as stack:
+    with (
+        tempfile.TemporaryDirectory(prefix=f"fslocate-{kind}-") as temporary,
+        ExitStack() as stack,
+    ):
         work = Path(temporary)
         mount = work / "mnt"
         mount.mkdir()
@@ -227,8 +261,13 @@ def run(kind):
             (lower / "search-root/whiteout").touch()
             (lower / "search-root/opaque").mkdir()
             (lower / "search-root/opaque/hidden").touch()
-            mounted(stack, "overlay", mount, "overlay",
-                    f"lowerdir={lower},upperdir={upper},workdir={layer_work}")
+            mounted(
+                stack,
+                "overlay",
+                mount,
+                "overlay",
+                f"lowerdir={lower},upperdir={upper},workdir={layer_work}",
+            )
             (root / "whiteout").unlink()
             (root / "opaque/hidden").unlink()
             (root / "opaque").rmdir()
@@ -242,7 +281,17 @@ def run(kind):
             manifest = fixture(stage / "search-root", True)
             disk = work / "readonly.img"
             if kind == "squashfs":
-                command(["mksquashfs", stage, disk, "-noappend", "-quiet", "-processors", "2"])
+                command(
+                    [
+                        "mksquashfs",
+                        stage,
+                        disk,
+                        "-noappend",
+                        "-quiet",
+                        "-processors",
+                        "2",
+                    ]
+                )
             else:
                 command(["mkfs.erofs", disk, stage])
             mounted(stack, disk, mount, kind, "loop,ro")
@@ -260,22 +309,43 @@ def run(kind):
             (child / "README-child").touch()
             manifest.update({b"child-dataset", b"child-dataset/README-child"})
             probe = work / "zfs_native_api"
-            command(["gcc", "-Wall", "-Wextra", "-Werror", "-D_GNU_SOURCE",
-                     "-I/usr/include/libzfs", "-I/usr/include/libspl",
-                     Path(__file__).with_name("zfs_native_api.c"), "-lzfs", "-o", probe])
+            command(
+                [
+                    "gcc",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-D_GNU_SOURCE",
+                    "-I/usr/include/libzfs",
+                    "-I/usr/include/libspl",
+                    Path(__file__).with_name("zfs_native_api.c"),
+                    "-lzfs",
+                    "-o",
+                    probe,
+                ]
+            )
             sudo("zpool", "sync", pool)
             result = sudo(probe, pool, pool, root / "nested/README.md").stdout.splitlines()
             assert len(result) == 2 and result[0] == b"34", result
             aliases = {os.fsencode(root) + b"/" + name for name in manifest if b"README" in name}
             aliases.add(os.fsencode(mount / "outside/alias"))
             assert result[1] in aliases, result
-            print(f"zfs native API: 34 hardlinks, OBJ_TO_PATH returned one alias: {result[1]!r}", flush=True)
+            print(
+                f"zfs native API: 34 hardlinks, OBJ_TO_PATH returned one alias: {result[1]!r}",
+                flush=True,
+            )
         elif kind == "nfs":
             source = work / "source"
             source.mkdir()
             manifest = fixture(source / "search-root", True)
             export = f"127.0.0.1:{source}"
-            sudo("exportfs", "-i", "-o", "rw,sync,no_subtree_check,no_root_squash", export)
+            sudo(
+                "exportfs",
+                "-i",
+                "-o",
+                "rw,sync,no_subtree_check,no_root_squash",
+                export,
+            )
             stack.callback(sudo, "exportfs", "-u", export)
             mounted(stack, export, mount, "nfs", "vers=4.2,proto=tcp,actimeo=0")
         elif kind == "smb":
@@ -307,9 +377,22 @@ guest ok = yes
 read only = no
 force user = {user}
 """)
-            server = subprocess.Popen(["sudo", "-n", "smbd", "--daemon", "--foreground", "--no-process-group", "-s", config],
-                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.PIPE, start_new_session=True)
+            server = subprocess.Popen(
+                [
+                    "sudo",
+                    "-n",
+                    "smbd",
+                    "--daemon",
+                    "--foreground",
+                    "--no-process-group",
+                    "-s",
+                    config,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
 
             def stop_server():
                 if server.poll() is None:
@@ -321,8 +404,11 @@ force user = {user}
             for _ in range(50):
                 if server.poll() is not None:
                     log = work / "smb.log"
-                    raise RuntimeError(f"smbd exited {server.returncode}: " + server.stderr.read().decode()
-                                       + (log.read_text() if log.exists() else ""))
+                    raise RuntimeError(
+                        f"smbd exited {server.returncode}: "
+                        + server.stderr.read().decode()
+                        + (log.read_text() if log.exists() else "")
+                    )
                 try:
                     with socket.create_connection(("127.0.0.1", port), timeout=0.1):
                         break
@@ -331,8 +417,13 @@ force user = {user}
                 time.sleep(0.1)
             else:
                 raise RuntimeError("temporary SMB server did not become ready")
-            mounted(stack, "//127.0.0.1/files", mount, "cifs",
-                    f"guest,port={port},vers=3.1.1,uid={os.getuid()},gid={os.getgid()},iocharset=utf8,cache=none,actimeo=0")
+            mounted(
+                stack,
+                "//127.0.0.1/files",
+                mount,
+                "cifs",
+                f"guest,port={port},vers=3.1.1,uid={os.getuid()},gid={os.getgid()},iocharset=utf8,cache=none,actimeo=0",
+            )
         if manifest is None:
             manifest = fixture(root, posix, hardlinks=kind == "ntfs3")
         verify(kind, root, manifest, writable, posix)

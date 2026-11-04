@@ -7,11 +7,10 @@ Only images created by this script are formatted. No existing device is touched.
 import base64
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-
+from pathlib import Path
 
 BINARY = Path(__file__).resolve().parents[1] / "zig-out/bin/fslocate"
 
@@ -24,7 +23,18 @@ def command(args):
 
 
 def search(root, pattern=b"", backend="auto", privileged=False, threads=8):
-    args = [BINARY, "-0", "-j", str(threads), "--root", root, "--backend", backend, "--", pattern]
+    args = [
+        BINARY,
+        "-0",
+        "-j",
+        str(threads),
+        "--root",
+        root,
+        "--backend",
+        backend,
+        "--",
+        pattern,
+    ]
     if privileged:
         args = ["sudo", "-n", *args]
     return subprocess.run(args, capture_output=True, timeout=30)
@@ -112,7 +122,15 @@ for filesystem, native, size, mkfs in (
             (second_mount / "README-second-filesystem").touch()
 
         expected = paths(search(root, backend="walk"))
-        for pattern in (b"", b"README", b"nested", b"\xff", b"[literal]*", b"leaf", b"line\nbreak"):
+        for pattern in (
+            b"",
+            b"README",
+            b"nested",
+            b"\xff",
+            b"[literal]*",
+            b"leaf",
+            b"line\nbreak",
+        ):
             baseline = paths(search(root, pattern, "walk"))
             assert paths(search(root, pattern)) == baseline
             assert paths(search(root, pattern, privileged=True)) == baseline
@@ -126,28 +144,61 @@ for filesystem, native, size, mkfs in (
         for mode in ("walk", "auto", "native") if native else ("walk", "auto"):
             result = command(["sudo", "-n", BINARY, "-o", "json", "-b", mode, "-r", root, ""])
             document = json.loads(result.stdout)
-            actual = {base64.b64decode(item["path_bytes_base64"], validate=True)
-                      if "path_bytes_base64" in item else item["path"].encode("utf-8")
-                      for item in document["items"]}
-            assert actual == expected and document["total"] == len(expected), (filesystem, mode)
+            actual = {
+                base64.b64decode(item["path_bytes_base64"], validate=True)
+                if "path_bytes_base64" in item
+                else item["path"].encode("utf-8")
+                for item in document["items"]
+            }
+            assert actual == expected and document["total"] == len(expected), (
+                filesystem,
+                mode,
+            )
             for output in ("text", "json"):
-                result = command(["sudo", "-n", BINARY, "-0", "-o", output, "-b", mode,
-                                  "--limit", "3", "-r", root, "README"])
+                result = command(
+                    [
+                        "sudo",
+                        "-n",
+                        BINARY,
+                        "-0",
+                        "-o",
+                        output,
+                        "-b",
+                        mode,
+                        "--limit",
+                        "3",
+                        "-r",
+                        root,
+                        "README",
+                    ]
+                )
                 if output == "json":
                     page = json.loads(result.stdout)
                     assert len(page["items"]) == 3 and page["truncated"] and "total" not in page
                 else:
-                    assert len(result.stdout.split(b"\0")[:-1]) == 3, (filesystem, mode, result.stdout)
+                    assert len(result.stdout.split(b"\0")[:-1]) == 3, (
+                        filesystem,
+                        mode,
+                        result.stdout,
+                    )
         if native and os.geteuid() != 0:
             result = search(root, "README", "native")
             assert result.returncode == 2 and b"CAP_SYS_ADMIN" in result.stderr, result.stderr
 
         if filesystem == "xfs-parent":
             probe_binary = work / "stale-handle-test"
-            command(["zig", "test", BINARY.parents[2] / "src/xfs.zig", "--test-filter", "XFS stale",
-                     "--test-no-exec", "-femit-bin=" + str(probe_binary)])
-            result = subprocess.run(["sudo", "-n", probe_binary], cwd=mount,
-                                    capture_output=True, timeout=30)
+            command(
+                [
+                    "zig",
+                    "test",
+                    BINARY.parents[2] / "src/xfs.zig",
+                    "--test-filter",
+                    "XFS stale",
+                    "--test-no-exec",
+                    "-femit-bin=" + str(probe_binary),
+                ]
+            )
+            result = subprocess.run(["sudo", "-n", probe_binary], cwd=mount, capture_output=True, timeout=30)
             assert result.returncode == 0, result.stderr
             assert b"SKIP" not in result.stderr, result.stderr
 
@@ -163,11 +214,18 @@ for filesystem, native, size, mkfs in (
 
         if native:
             with open("/dev/full", "wb") as full:
-                result = subprocess.run(["sudo", "-n", BINARY, "-b", "native", "-r", root, "README"],
-                                        stdout=full, stderr=subprocess.PIPE, timeout=30)
+                result = subprocess.run(
+                    ["sudo", "-n", BINARY, "-b", "native", "-r", root, "README"],
+                    stdout=full,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
             assert result.returncode == 2, result.stderr
-            with subprocess.Popen(["sudo", "-n", BINARY, "-b", "native", "-r", root, ""],
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            with subprocess.Popen(
+                ["sudo", "-n", BINARY, "-b", "native", "-r", root, ""],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as process:
                 process.stdout.close()
                 assert process.wait(timeout=30) == 0, process.stderr.read()
 
@@ -188,11 +246,17 @@ for filesystem, native, size, mkfs in (
             assert b"README-ext-mount" in unprivileged.stdout
             result = search(root, "README", "native", True, threads=1)
             assert result.returncode == 2 and b"NativeUnsupported" in result.stderr, result.stderr
-            native_expected = {path for path in paths(search(root, "README", "walk", True))
-                               if not path.startswith(os.fsencode(ext_mount) + b"/")}
+            native_expected = {
+                path
+                for path in paths(search(root, "README", "walk", True))
+                if not path.startswith(os.fsencode(ext_mount) + b"/")
+            }
             assert set(result.stdout.split(b"\0")[:-1]) == native_expected, result.stdout
 
-        print(f"{filesystem}: native={native}; {len(expected)} paths; parity, paging, hardlinks, root scope, live changes OK", flush=True)
+        print(
+            f"{filesystem}: native={native}; {len(expected)} paths; parity, paging, hardlinks, root scope, live changes OK",
+            flush=True,
+        )
     finally:
         for nested_mount in reversed(nested_mounts):
             command(["sudo", "-n", "umount", nested_mount])

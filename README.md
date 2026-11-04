@@ -196,11 +196,14 @@ References: [Zig 0.17](https://ziglang.org/documentation/0.17.0/),
 Requires Zig 0.17.x; CLI tests also use Python 3's standard library.
 
 ```sh
-zig fmt --check build.zig src
+zig build check
 zig build test
 zig build -Doptimize=ReleaseSafe
 python3 -m unittest discover -s tests -v
 ```
+
+`zig build check` runs `zig fmt --check`, `ruff check`, `ruff format --check`,
+and `clang-format --dry-run --Werror` (blocking; no per-tool bypass).
 
 CLI tests use `/dev/shm` when available to avoid disk-load interference.
 Set `TMPDIR=/path/on/filesystem` to choose a different location. Streaming
